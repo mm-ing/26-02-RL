@@ -1,0 +1,3 @@
+- generate a grid map with N x M fields
+- making a labyrinth from that by placing not passable objects on some fields
+- agent moves along the grid (up, down, left right), no diagonal movement
