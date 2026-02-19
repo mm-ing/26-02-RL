@@ -1,0 +1,64 @@
+import tkinter as tk
+import random
+
+class BanditFrame(tk.Frame):
+    def __init__(self, master, index, p, *args, **kwargs):
+        super().__init__(master, *args, **kwargs)
+        self.index = index
+        self.p = p
+        self.clicks = 0
+        self.last_value = None
+        self.total = 0
+
+        self.btn = tk.Button(self, text=f"Bandit {index}", width=14, command=self.on_click)
+        self.btn.grid(row=0, column=0, columnspan=2, pady=(0,6))
+
+        self.p_label = tk.Label(self, text=f"p = {int(self.p*100)}%", font=("TkDefaultFont", 8))
+        self.p_label.grid(row=1, column=0, columnspan=2)
+
+        self.clicks_label = tk.Label(self, text="Anzahl Klicks: 0")
+        self.clicks_label.grid(row=2, column=0, sticky="w", padx=(0,6))
+
+        self.value_label = tk.Label(self, text="Ausgabewert: - (Summe: 0)")
+        self.value_label.grid(row=2, column=1, sticky="e")
+
+    def on_click(self):
+        self.clicks += 1
+        if random.random() < self.p:
+            value = random.randint(50, 100)
+        else:
+            value = random.randint(0, 49)
+        self.last_value = value
+        self.total += value
+        self.update_labels()
+
+    def update_labels(self):
+        self.clicks_label.config(text=f"Anzahl Klicks: {self.clicks}")
+        self.value_label.config(text=f"Ausgabewert: {self.last_value} (Summe: {self.total})")
+
+def main():
+    root = tk.Tk()
+    root.title("3-Banditen")
+    root.geometry("560x220")
+    root.resizable(True, True)
+
+    container = tk.Frame(root, padx=12, pady=12)
+    container.pack(fill="both", expand=True)
+
+    header = tk.Label(container, text="Viel Erfolg Dir!!!", font=("TkDefaultFont", 14, "bold"))
+    header.grid(row=0, column=0, columnspan=3, pady=(0,12))
+
+    p_values = [0.20, 0.40, 0.80]
+    bandits = []
+    for i, p in enumerate(p_values, start=1):
+        bf = BanditFrame(container, i, p, bd=1, relief="groove", padx=8, pady=6)
+        bf.grid(row=1, column=i-1, padx=8, sticky="nsew")
+        bandits.append(bf)
+
+    for col in range(3):
+        container.grid_columnconfigure(col, weight=1)
+
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()

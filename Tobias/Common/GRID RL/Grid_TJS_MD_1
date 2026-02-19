@@ -1,0 +1,21 @@
+# Versuch eines Prompts dafür...
+# Generelles Grid mit beliebig X und Y, erstmal X 0,1,2 und Y 0-4 (5 Felder)
+Bitte nutze 
+
+0. Ich möchte ein Reinforcement Learning-MODELL entwickeln und nutzen.
+1. Das Modell soll in einem Grid-Environment arbeiten, das per Default aus 3 Spalten (X=0,1,2) und 5 Zeilen (Y=0-4) besteht.
+Erstelle ein Grid-Environment, in dem ein Agent lernen kann, sich zu bewegen.
+Der Agent soll in der Lage sein, sich in vier Richtungen zu bewegen: nach oben, unten, links und rechts.
+Das Ziel des Agenten ist es, Belohnungen zu maximieren, die an bestimmten Positionen im Grid verteilt sind.
+Allerdings gibt es NUR ein Feld, das ZIEL, auf dem eine Belohnung liegt, und alle anderen Felder haben keine Belohnung.
+Bitte visualisiere das Grid-Environment und die Position des Agenten sowie die Belohnungen,
+damit der Lernprozess nachvollziehbar ist.
+Nutze matplotlib oder eine ähnliche Bibliothek, um das Grid-Environment zu visualisieren.
+Füge Überprüfungen hinzu, um sicherzustellen, dass der Agent nicht außerhalb des Grids agieren kann.
+Füge Überschrift "RL-Modell GRID-Environment TJS" hinzu, um die Visualisierung zu beschreiben.
+Erstelle Buttons zur Einstellung der PARAMTER (Anzahl Steps pro Episode, Max Episoden, "Save Last Sampling")
+Reward-Plot soll ...
+2. Der Agent soll in diesem Grid-Environment lernen, wie er sich bewegen kann, um Belohnungen zu maximieren.
+Füge eine Funktion hinzu, die es dem Agenten ermöglicht, Aktionen auszuführen und die Belohnungen zu erhalten,
+abhängig von seiner Position im Grid.
+

@@ -1,0 +1,25 @@
+Bitte erstelle mir aus folgenden Anweisungen einen Prompt, den Du gut verstehst:
+
+Erstelle ein Python 3-Programm mit tkinter, das eine GUI erstellt.
+Teile die GUI in oberen und unteren Bereich auf.
+Im oberen Bereich soll eine Überschrift "Viel MANUELLEN Erfolg Dir!!!" angezeigt werden.
+Im unteren Bereich soll eine Überschrift "Dies wird vom Agenten gesteuert!!!" angezeigt werden.
+Sowohl der obere als auch der untere Bereich sollen drei Banditen (Buttons) bereitstellen.
+Bennene diese drei Buttons als Bandit mit laufender Nummer.
+Jedem Banditen wird beim Programmstart eine Auszahlungswahrscheinlichkeit fest zugewiesen.
+Bandit 1: 20%. Bandit 2: 40%. Bandit 3: 80%.
+Nur mit dieser Wahrscheinlichkeit soll bei jedem Klick eines Banditen berechnet werden, ob überhaupt etwas ausgezahlt wird.
+Die mögliche Auszahlung soll also Bernoulli-Logik entsprechen.
+Jeder Bandit hat zwei Labels daneben/unterhalb:
+"Anzahl Klicks: N" — zählt, wie oft der Bandit angeklickt wurde.
+"Ausgabewert: X" — zeigt den zuletzt erzeugten Ausgabewert und die Summe der bisherigen Auszahlungen.
+Klick-Verhalten: Wenn ein Bandit angeklickt wird, wird die Klick-Anzahl erhöht und ein neuer Ausgabewert generiert:
+Erstelle je Bandit zwei Labels, die Anzahl Klicks und Ausgabewert anzeigen.
+Im oberen Bereich soll der Nutzer die drei Banditen anklicken können und damit aktivieren.
+Im untereen Bereich soll der Agent die drei Banditen automatisch anklicken, um die Auszahlungen zu maximieren.
+Nach jedem Klick die beiden Labels des jeweiligen Banditen aktualisieren.
+UI muss responsiv sein und wiederholte Klicks erlauben.
+Zeige die Wahrscheinlichkeit p als zusätzliches kleines Label pro Bandit.
+Anzehl der Iterationen: 100.
+
+Gib sauberen, gut lesbaren Python-Code aus, der sofort lauffähig ist (inkl. benötigter Importe).
