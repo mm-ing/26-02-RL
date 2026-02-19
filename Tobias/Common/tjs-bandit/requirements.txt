@@ -1,0 +1,4 @@
+Tkinter
+matplotlib
+numpy
+scipy
