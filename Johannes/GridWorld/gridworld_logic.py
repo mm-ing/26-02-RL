@@ -1,4 +1,5 @@
 import random
+import os
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Tuple, List, Set, Dict
@@ -13,7 +14,13 @@ class Grid:
                  start: State = (0, 2), target: State = None):
         self.M = M
         self.N = N
-        self.blocked: Set[State] = set(blocked or [])
+        # default blocked fields per spec if caller did not provide any
+        if blocked is None:
+            default_blocked = [(2, 2), (2, 1)]
+            # only keep defaults that fit inside grid
+            self.blocked: Set[State] = set((x, y) for (x, y) in default_blocked if 0 <= x < M and 0 <= y < N)
+        else:
+            self.blocked: Set[State] = set(blocked)
         self.start = start
         self.target = target if target is not None else (M - 1, N - 1)
 
@@ -34,6 +41,27 @@ class Grid:
             if self.valid(ns):
                 nbrs.append(ns)
         return nbrs
+
+    def is_reachable(self, start: State = None, target: State = None) -> bool:
+        """Return True if target is reachable from start given current blocked cells."""
+        s0 = start if start is not None else self.start
+        t0 = target if target is not None else self.target
+        if not self.valid(s0) or not self.valid(t0):
+            return False
+        # BFS
+        from collections import deque
+        q = deque([s0])
+        seen = {s0}
+        while q:
+            s = q.popleft()
+            if s == t0:
+                return True
+            for dx, dy in self.ACTIONS.values():
+                ns = (s[0] + dx, s[1] + dy)
+                if ns not in seen and self.valid(ns):
+                    seen.add(ns)
+                    q.append(ns)
+        return False
 
     def step(self, s: State, action: int, noise: float = 0.0) -> Tuple[State, int, bool]:
         # Deterministic intended move
@@ -93,9 +121,11 @@ class MonteCarloAgent:
         self.V: Dict[State, float] = defaultdict(float)
 
     def process_episode(self, episode_states: List[State], rewards: List[int]):
+        # rewards list is length T (number of transitions), episode_states is length T+1
         G = 0
         visited = set()
-        for t in range(len(episode_states) - 1, -1, -1):
+        # iterate backwards over rewards and corresponding states at time t
+        for t in range(len(rewards) - 1, -1, -1):
             s = episode_states[t]
             r = rewards[t]
             G = self.gamma * G + r
@@ -151,8 +181,15 @@ class Trainer:
         fname = None
         if save_csv:
             ts = int(time.time())
+            # ensure results_csv folder exists inside this package folder
+            outdir = os.path.join(os.path.dirname(__file__), 'results_csv')
+            try:
+                os.makedirs(outdir, exist_ok=True)
+            except Exception:
+                pass
             fname = f"{save_csv}_{ts}.csv"
-            csvfile = open(fname, 'w', newline='')
+            fpath = os.path.join(outdir, fname)
+            csvfile = open(fpath, 'w', newline='')
             writer = csv.writer(csvfile)
             writer.writerow(['episode', 'step', 's_x', 's_y', 'action', 'reward', 'next_s_x', 'next_s_y', 'done'])
         for ep in range(num_episodes):

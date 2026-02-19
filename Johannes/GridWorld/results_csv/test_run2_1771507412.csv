@@ -1,0 +1,4 @@
+episode,step,s_x,s_y,action,reward,next_s_x,next_s_y,done
+0,0,0,2,0,-1,0,1,0
+0,1,0,1,0,-1,0,0,0
+0,2,0,0,0,-1,0,0,0
