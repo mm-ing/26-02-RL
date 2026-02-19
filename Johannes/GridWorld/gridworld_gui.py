@@ -8,6 +8,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import time
 import itertools
+import random
 try:
     from PIL import Image, ImageDraw, ImageTk
     PIL_AVAILABLE = True
@@ -56,6 +57,7 @@ class GridWorldGUI(tk.Tk):
         self.policy = None
         self.agent_instance = None
         self.training = False
+        self._stop_requested = False
         self.dragging = None  # 'agent' or 'target' or None
         self._agent_path = []
         self._animating = False
@@ -231,6 +233,11 @@ class GridWorldGUI(tk.Tk):
         btn_train = ttk.Button(right, text='Train and Run', command=self._train_and_run)
         btn_train.grid(row=row, column=0, columnspan=2, pady=3, sticky='ew')
         Tooltip(btn_train, 'Train selected policy for configured episodes')
+
+        row += 1
+        btn_reset_all = ttk.Button(right, text='Reset All', command=self._reset_all)
+        btn_reset_all.grid(row=row, column=0, columnspan=2, pady=3, sticky='ew')
+        Tooltip(btn_reset_all, 'Stop training (if running), clear plot and reset map')
 
         row += 1
         self.live_plot_var = tk.BooleanVar(value=True)
@@ -480,6 +487,10 @@ class GridWorldGUI(tk.Tk):
         try:
             self._agent_path = []
             self.canvas.delete('agent_path')
+            # also clear any ongoing single-step episode accumulation
+            self._ongoing_states = None
+            self._ongoing_rewards = None
+            self._ongoing_transitions = None
         except Exception:
             pass
         self.draw_grid()
@@ -632,12 +643,58 @@ class GridWorldGUI(tk.Tk):
     def _run_single_step(self):
         if self._animating:
             return
-        policy = self._create_policy()
-        # run one step starting from current agent position (no reset)
-        transitions, total = self.trainer.run_episode(policy, epsilon=0.1, max_steps=1)
-        # animate the single transition
-        self._agent_path = [self.grid_obj.start]
-        self._animate_transitions(transitions, reset_before=False)
+        # ensure we keep a persistent policy instance for ongoing single-step episodes
+        if not hasattr(self, 'agent_instance') or self.agent_instance is None:
+            policy = self._create_policy()
+        else:
+            policy = self.agent_instance
+
+        # initialize ongoing episode buffers if not present
+        if not hasattr(self, '_ongoing_states') or self._ongoing_states is None:
+            self._ongoing_states = [self.grid_obj.start]
+            self._ongoing_rewards = []
+            self._ongoing_transitions = []
+
+        s = self.grid_obj.start
+        # epsilon-greedy selection for single-step (small exploration)
+        eps = 0.1
+        if hasattr(policy, 'best_action'):
+            if random.random() < eps:
+                a = random.choice(list(self.grid_obj.ACTIONS.keys()))
+            else:
+                a = policy.best_action(s)
+        else:
+            a = random.choice(list(self.grid_obj.ACTIONS.keys()))
+
+        s2, r, done = self.grid_obj.step(s, a, noise=self.trainer.noise)
+
+        # apply any immediate update (QLearning)
+        if hasattr(policy, 'update'):
+            policy.update(s, a, r, s2)
+
+        # append to ongoing episode
+        self._ongoing_transitions.append((s, a, r, s2, done))
+        self._ongoing_rewards.append(r)
+        self._ongoing_states.append(s2)
+
+        # advance agent position
+        try:
+            self.grid_obj.start = s2
+            self.trainer.grid = self.grid_obj
+        except Exception:
+            pass
+
+        # animate this single transition without clearing prior path
+        self._animate_transitions([(s, a, r, s2, done)], reset_before=False)
+
+        # if episode finished, let MonteCarloAgent process the full episode and clear buffers
+        if done:
+            if isinstance(policy, MonteCarloAgent):
+                policy.process_episode(self._ongoing_states, self._ongoing_rewards)
+            # reset ongoing buffers so next single-step starts fresh
+            self._ongoing_states = None
+            self._ongoing_rewards = None
+            self._ongoing_transitions = None
 
     def _run_single_episode(self):
         if self._animating:
@@ -650,6 +707,10 @@ class GridWorldGUI(tk.Tk):
             self.trainer.grid = self.grid_obj
         except Exception:
             pass
+        # clear any ongoing single-step accumulation
+        self._ongoing_states = None
+        self._ongoing_rewards = None
+        self._ongoing_transitions = None
         policy = self._create_policy()
         transitions, total = self.trainer.run_episode(policy, epsilon=0.1, max_steps=self.max_steps_var.get())
         # animate full episode
@@ -660,6 +721,7 @@ class GridWorldGUI(tk.Tk):
         if self.training:
             return
         self.training = True
+        self._stop_requested = False
 
         def worker():
             policy = self._create_policy()
@@ -667,17 +729,26 @@ class GridWorldGUI(tk.Tk):
             episodes = self.episodes_var.get()
             alpha = self.alpha_var.get()
             gamma = self.gamma_var.get()
-            epsilon = 0.1
-            max_steps = self.max_steps_var.get()
+            # Monte Carlo needs longer episodes and more exploration
+            if self.policy_var.get() == 'mc':
+                epsilon = 0.3
+                max_steps = max(self.max_steps_var.get(), 200)
+            else:
+                epsilon = 0.1
+                max_steps = self.max_steps_var.get()
             for ep in range(episodes):
+                if self._stop_requested:
+                    break
                 transitions, total = self.trainer.run_episode(policy, epsilon=epsilon, max_steps=max_steps)
                 rewards.append(total)
                 if self.live_plot_var.get():
                     self.after(0, lambda r=rewards.copy(): self._update_plot(current_rewards=r))
-            # final: register run and redraw
+            # final: register run and redraw (mark if stopped)
             pol = 'Q-learning' if self.policy_var.get() == 'q' else 'MonteCarlo'
-            label = f"{pol} | α={alpha:.2f}, γ={gamma:.2f}, eps={epsilon}, ep={episodes}"
-            self.after(0, lambda r=rewards, lab=label: self._add_plot_run(r, lab))
+            status = 'Stopped' if self._stop_requested else 'Completed'
+            label = f"{pol} | α={alpha:.2f}, γ={gamma:.2f}, eps={epsilon}, ep={episodes} [{status}]"
+            if rewards:
+                self.after(0, lambda r=rewards, lab=label: self._add_plot_run(r, lab))
             self.training = False
 
         threading.Thread(target=worker, daemon=True).start()
@@ -691,6 +762,27 @@ class GridWorldGUI(tk.Tk):
             mc = MonteCarloAgent(self.grid_obj, gamma=self.gamma_var.get())
             self.agent_instance = mc
             return mc
+
+    def _reset_all(self):
+        # request stop for running training
+        try:
+            self._stop_requested = True
+        except Exception:
+            pass
+        # clear training state and visualizations
+        try:
+            self.training = False
+            self.plot_runs = []
+            self._redraw_all_plots()
+            # reset the map (also clears agent path)
+            self._reset_map()
+            self.agent_instance = None
+        except Exception:
+            pass
+        try:
+            tk.messagebox.showinfo('Reset All', 'Training stopped (if running) and map reset.')
+        except Exception:
+            pass
 
     def _animate_transitions(self, transitions, reset_before=False, delay=150):
         # transitions: list of (s,a,r,s2,done)
@@ -736,20 +828,45 @@ class GridWorldGUI(tk.Tk):
     def _redraw_all_plots(self, current_rewards=None):
         self.ax.clear()
         lines = []
+        all_vals = []
         for run in self.plot_runs:
             lr = run['rewards']
             if not lr:
                 continue
             line, = self.ax.plot(lr, '-o', color=run['color'], label=run['label'], alpha=1.0 if run['visible'] else 0.2, visible=run['visible'])
             lines.append(line)
+            all_vals.extend(lr)
         # overlay current running rewards as dashed line
         if current_rewards:
             self.ax.plot(current_rewards, '--', color='gray', label='current (in progress)')
+            all_vals.extend(current_rewards)
 
         self.ax.set_title('Episode rewards', fontsize=12)
         self.ax.set_xlabel('Episode', fontsize=11)
         self.ax.set_ylabel('Total Reward', fontsize=11)
         self.ax.tick_params(axis='both', which='major', labelsize=9)
+        # always show horizontal zero line and ensure 0 is a y-tick
+        try:
+            # determine y-limits to include 0
+            if all_vals:
+                y_min = min(all_vals)
+                y_max = max(all_vals)
+            else:
+                y_min, y_max = -1, 1
+            y_min = min(y_min, 0)
+            y_max = max(y_max, 0)
+            margin = max(1.0, (y_max - y_min) * 0.1)
+            self.ax.set_ylim(y_min - margin, y_max + margin)
+            # add zero line
+            self.ax.axhline(0, color='black', linestyle='--', linewidth=1)
+            # ensure 0 tick visible
+            yt = list(self.ax.get_yticks())
+            if 0 not in yt:
+                yt.append(0)
+                yt = sorted(yt)
+                self.ax.set_yticks(yt)
+        except Exception:
+            pass
         # legend at right
         try:
             leg = self.ax.legend(loc='center left', bbox_to_anchor=(1, 0.5))
@@ -830,15 +947,44 @@ class GridWorldGUI(tk.Tk):
             tree.insert('', 'end', values=vals)
 
     def _show_value_table(self):
-        if not isinstance(self.agent_instance, MonteCarloAgent):
-            tk.messagebox.showinfo('Value table', 'Value table available for Monte Carlo agent')
-            return
+        # Show a value table for states. Works for MonteCarloAgent (state-value)
+        # and for QLearningAgent by deriving V(s) = max_a Q(s,a).
         top = tk.Toplevel(self)
         top.title('Value table')
-        text = tk.Text(top, width=40, height=20)
-        text.pack()
-        for s, v in sorted(self.agent_instance.V.items()):
-            text.insert('end', f's={s} -> {v:.3f}\n')
+
+        cols = ['State', 'Value']
+        tree = ttk.Treeview(top, columns=cols, show='headings', height=20)
+        for c in cols:
+            tree.heading(c, text=c)
+            tree.column(c, width=120, anchor='center')
+
+        vsb = ttk.Scrollbar(top, orient='vertical', command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        tree.grid(row=0, column=0, sticky='nsew')
+        vsb.grid(row=0, column=1, sticky='ns')
+        top.rowconfigure(0, weight=1)
+        top.columnconfigure(0, weight=1)
+
+        states = []
+        for y in range(self.grid_obj.N):
+            for x in range(self.grid_obj.M):
+                s = (x, y)
+                states.append(s)
+
+        for s in sorted(states, key=lambda t: (t[1], t[0])):
+            if self.grid_obj.is_blocked(s):
+                val_str = 'BLOCKED'
+            else:
+                # Prefer explicit state-value if agent provides it
+                if hasattr(self.agent_instance, 'get_v'):
+                    v = self.agent_instance.get_v(s)
+                elif hasattr(self.agent_instance, 'get_q'):
+                    # derive V(s) = max_a Q(s,a)
+                    v = max(self.agent_instance.get_q(s, a) for a in [0, 1, 2, 3])
+                else:
+                    v = 0.0
+                val_str = f'{v:.3f}'
+            tree.insert('', 'end', values=(f'{s}', val_str))
 
     def _save_csv(self):
         # train and save samplings

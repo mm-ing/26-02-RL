@@ -111,7 +111,13 @@ class QLearningAgent:
 
 
 class MonteCarloAgent:
-    """First-visit Monte Carlo value estimation for states under a given policy."""
+    """First-visit Monte Carlo prediction/control using state-value returns (V).
+
+    This agent estimates state values V(s) via first-visit Monte Carlo.
+    The trainer uses epsilon-greedy action selection when `best_action` is
+    present; `best_action` here picks the action leading to the neighbor
+    state with highest estimated V.
+    """
 
     def __init__(self, grid: Grid, gamma: float = 0.99):
         self.grid = grid
@@ -121,19 +127,42 @@ class MonteCarloAgent:
         self.V: Dict[State, float] = defaultdict(float)
 
     def process_episode(self, episode_states: List[State], rewards: List[int]):
-        # rewards list is length T (number of transitions), episode_states is length T+1
-        G = 0
+        """Process a completed episode given lists of states and rewards.
+
+        `episode_states` should be a list of length T+1: S0..ST, and
+        `rewards` should have length T with rewards r0..r_{T-1} where
+        r_t is reward observed after taking action from S_t.
+        Performs first-visit updates for states.
+        """
+        G = 0.0
         visited = set()
-        # iterate backwards over rewards and corresponding states at time t
+        # iterate backwards over time steps
+        # rewards[t] corresponds to transition S_t -> S_{t+1}
         for t in range(len(rewards) - 1, -1, -1):
-            s = episode_states[t]
             r = rewards[t]
+            s = episode_states[t]
             G = self.gamma * G + r
             if s not in visited:
                 visited.add(s)
                 self.returns_sum[s] += G
                 self.returns_count[s] += 1
                 self.V[s] = self.returns_sum[s] / self.returns_count[s]
+
+    def best_action(self, s: State) -> int:
+        # choose action that leads to neighbor with highest V
+        vals = {}
+        for a, (dx, dy) in self.grid.ACTIONS.items():
+            ns = (s[0] + dx, s[1] + dy)
+            if not self.grid.valid(ns):
+                vals[a] = float('-inf')
+            else:
+                vals[a] = self.V.get(ns, 0.0)
+        maxv = max(vals.values())
+        bests = [a for a, v in vals.items() if v == maxv]
+        return random.choice(bests)
+
+    def get_v(self, s: State) -> float:
+        return self.V.get(s, 0.0)
 
 
 class Trainer:
@@ -168,7 +197,8 @@ class Trainer:
             if done:
                 break
 
-        # If Monte Carlo policy, let it process episode
+        # If Monte Carlo policy (state-value), let it process episode
+        # by passing the list of visited states and corresponding rewards.
         if isinstance(policy, MonteCarloAgent):
             policy.process_episode(episode_states, rewards)
 
