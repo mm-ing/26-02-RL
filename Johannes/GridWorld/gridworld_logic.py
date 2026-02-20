@@ -165,30 +165,150 @@ class MonteCarloAgent:
         return self.V.get(s, 0.0)
 
 
+class SARSAAgent:
+    """On-policy SARSA (state-action) agent."""
+
+    def __init__(self, grid: Grid, alpha: float = 0.5, gamma: float = 0.99):
+        self.grid = grid
+        self.alpha = alpha
+        self.gamma = gamma
+        self.Q: Dict[Tuple[State, int], float] = defaultdict(float)
+
+    def get_q(self, s: State, a: int) -> float:
+        return self.Q.get((s, a), 0.0)
+
+    def best_action(self, s: State) -> int:
+        vals = {a: self.get_q(s, a) for a in self.grid.ACTIONS}
+        maxv = max(vals.values())
+        bests = [a for a, v in vals.items() if v == maxv]
+        return random.choice(bests)
+
+    def update(self, s: State, a: int, r: int, s2: State, a2: int):
+        # If terminal (a2 is None), target is r
+        if a2 is None:
+            target = r
+        else:
+            q_next = self.get_q(s2, a2)
+            target = r + self.gamma * q_next
+        cur = self.get_q(s, a)
+        self.Q[(s, a)] = cur + self.alpha * (target - cur)
+
+
+class ExpectedSarsaAgent:
+    """Expected SARSA agent using epsilon-greedy expectation."""
+
+    def __init__(self, grid: Grid, alpha: float = 0.5, gamma: float = 0.99):
+        self.grid = grid
+        self.alpha = alpha
+        self.gamma = gamma
+        self.Q: Dict[Tuple[State, int], float] = defaultdict(float)
+
+    def get_q(self, s: State, a: int) -> float:
+        return self.Q.get((s, a), 0.0)
+
+    def best_action(self, s: State) -> int:
+        vals = {a: self.get_q(s, a) for a in self.grid.ACTIONS}
+        maxv = max(vals.values())
+        bests = [a for a, v in vals.items() if v == maxv]
+        return random.choice(bests)
+
+    def update(self, s: State, a: int, r: int, s2: State, epsilon: float):
+        # If terminal, expected next Q is 0
+        if s2 == self.grid.target:
+            expected_q = 0.0
+        else:
+            # compute expectation under epsilon-greedy at s2
+            n_actions = len(self.grid.ACTIONS)
+            greedy = self.best_action(s2)
+            expected_q = 0.0
+            for a2 in self.grid.ACTIONS:
+                q = self.get_q(s2, a2)
+                prob = epsilon / n_actions
+                if a2 == greedy:
+                    prob += (1.0 - epsilon)
+                expected_q += prob * q
+
+        target = r + self.gamma * expected_q
+        cur = self.get_q(s, a)
+        self.Q[(s, a)] = cur + self.alpha * (target - cur)
+
+
 class Trainer:
     def __init__(self, grid: Grid, noise: float = 0.0):
         self.grid = grid
         self.noise = noise
 
-    def run_episode(self, policy, epsilon: float = 0.1, max_steps: int = 1000):
+    def run_episode(self, policy, epsilon: float = 0.1, max_steps: int = 1000, progress_callback=None):
         s = self.grid.start
         episode_states = [s]
         rewards = []
         transitions = []
         total_reward = 0
+        actions_list = list(self.grid.ACTIONS.keys())
+
+        # SARSA-like algorithms require selecting the next action before updating.
+        if isinstance(policy, SARSAAgent) or isinstance(policy, ExpectedSarsaAgent):
+            # choose initial action
+            if random.random() < epsilon:
+                a = random.choice(actions_list)
+            else:
+                a = policy.best_action(s)
+
+            for step in range(max_steps):
+                s2, r, done = self.grid.step(s, a, noise=self.noise)
+                transitions.append((s, a, r, s2, done))
+                rewards.append(r)
+                # report progress (step index) if callback provided
+                try:
+                    if progress_callback:
+                        progress_callback(step)
+                except Exception:
+                    pass
+                total_reward += r
+
+                # choose next action for update/continuation
+                if done:
+                    a2 = None
+                else:
+                    if random.random() < epsilon:
+                        a2 = random.choice(actions_list)
+                    else:
+                        a2 = policy.best_action(s2)
+
+                if isinstance(policy, SARSAAgent):
+                    policy.update(s, a, r, s2, a2)
+                else:  # ExpectedSarsaAgent
+                    policy.update(s, a, r, s2, epsilon)
+
+                s = s2
+                a = a2
+                episode_states.append(s)
+                if done:
+                    break
+
+            # Monte Carlo not relevant here; return collected transitions
+            return transitions, total_reward
+
+        # Default (Q-learning / Monte Carlo / others) loop
         for step in range(max_steps):
             if hasattr(policy, 'best_action'):
-                # epsilon-greedy for Q-learning
+                # epsilon-greedy
                 if random.random() < epsilon:
-                    a = random.choice(list(self.grid.ACTIONS.keys()))
+                    a = random.choice(actions_list)
                 else:
                     a = policy.best_action(s)
             else:
-                a = random.choice(list(self.grid.ACTIONS.keys()))
+                a = random.choice(actions_list)
 
             s2, r, done = self.grid.step(s, a, noise=self.noise)
             transitions.append((s, a, r, s2, done))
             rewards.append(r)
+            # report progress (step index) if callback provided
+            try:
+                if progress_callback:
+                    progress_callback(step)
+            except Exception:
+                pass
             total_reward += r
             if hasattr(policy, 'update'):
                 policy.update(s, a, r, s2)
@@ -198,7 +318,6 @@ class Trainer:
                 break
 
         # If Monte Carlo policy (state-value), let it process episode
-        # by passing the list of visited states and corresponding rewards.
         if isinstance(policy, MonteCarloAgent):
             policy.process_episode(episode_states, rewards)
 

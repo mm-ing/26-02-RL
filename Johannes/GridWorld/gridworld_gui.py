@@ -9,6 +9,8 @@ from matplotlib.figure import Figure
 import time
 import itertools
 import random
+import os
+import datetime
 try:
     from PIL import Image, ImageDraw, ImageTk
     PIL_AVAILABLE = True
@@ -16,9 +18,9 @@ except Exception:
     PIL_AVAILABLE = False
 
 try:
-    from .gridworld_logic import Grid, QLearningAgent, MonteCarloAgent, Trainer
+    from .gridworld_logic import Grid, QLearningAgent, MonteCarloAgent, Trainer, SARSAAgent, ExpectedSarsaAgent
 except Exception:
-    from gridworld_logic import Grid, QLearningAgent, MonteCarloAgent, Trainer
+    from gridworld_logic import Grid, QLearningAgent, MonteCarloAgent, Trainer, SARSAAgent, ExpectedSarsaAgent
 
 
 class Tooltip:
@@ -52,6 +54,8 @@ class GridWorldGUI(tk.Tk):
     def __init__(self, grid: Grid):
         super().__init__()
         self.title('GridWorld RL')
+        # resize debounce id
+        self._resize_after_id = None
         self.grid_obj = grid
         self.trainer = Trainer(grid)
         self.policy = None
@@ -64,26 +68,72 @@ class GridWorldGUI(tk.Tk):
         self._build_ui()
 
     def _build_ui(self):
-        # make root scalable
+        # make root scalable; keep training params column non-expanding (tight)
         self.rowconfigure(0, weight=1)
-        self.columnconfigure(0, weight=3)
-        self.columnconfigure(1, weight=1)
-        left = ttk.Frame(self)
-        left.grid(row=0, column=0, sticky='nsew')
-        right = ttk.Frame(self)
-        right.grid(row=0, column=1, sticky='nsew')
+        # Controls column will expand, training params column kept tight (weight=0)
+        self.columnconfigure(0, weight=9)
+        self.columnconfigure(1, weight=0)
+        # main layout: Environment (top-left), Controls (below env),
+        # Training Parameters (right of controls) and Live Plot (bottom)
+        self.rowconfigure(0, weight=1)   # Environment (resizable)
+        self.rowconfigure(1, weight=0)   # Controls (fixed)
+        self.rowconfigure(2, weight=0)   # Current State (fixed)
+        self.rowconfigure(3, weight=1)   # Live Plot (resizable)
+        # keep training parameters column tight (non-expanding)
+        self.columnconfigure(0, weight=9)
+        self.columnconfigure(1, weight=0)
 
-        # Canvas for grid
-        self.canvas = tk.Canvas(left, width=400, height=300, bg='white')
-        self.canvas.grid(row=0, column=0, padx=10, pady=10, sticky='nsew')
-        left.rowconfigure(0, weight=1)
-        left.columnconfigure(0, weight=1)
-        # redraw on resize so grid scales
+        # Environment panel (contains grid and environment inputs)
+        env_frame = ttk.LabelFrame(self, text='Environment', padding=6)
+        env_frame.grid(row=0, column=0, columnspan=2, sticky='nsew', padx=8, pady=8)
+        env_frame.rowconfigure(0, weight=1)
+        env_frame.columnconfigure(0, weight=1)
+
+        # Canvas for grid (resizes with its frame) - make scrollable
+        # fixed cell pixel size so cells keep same size when grid dimensions change
+        # increased by factor 2 per user request
+        self.cell_size = 60
+        canvas_wrap = ttk.Frame(env_frame)
+        canvas_wrap.grid(row=0, column=0, sticky='nsew')
+        canvas_wrap.rowconfigure(0, weight=1)
+        canvas_wrap.columnconfigure(0, weight=1)
+        self.canvas = tk.Canvas(canvas_wrap, width=400, height=300, bg='white')
+        self.canvas.grid(row=0, column=0, sticky='nsew')
+        self.vbar = ttk.Scrollbar(canvas_wrap, orient='vertical', command=self.canvas.yview)
+        self.vbar.grid(row=0, column=1, sticky='ns')
+        self.hbar = ttk.Scrollbar(canvas_wrap, orient='horizontal', command=self.canvas.xview)
+        self.hbar.grid(row=1, column=0, sticky='ew')
+        self.canvas.configure(yscrollcommand=self.vbar.set, xscrollcommand=self.hbar.set)
         self.canvas.bind('<Configure>', lambda e: self.draw_grid())
-        # controls below the canvas in left frame
-        controls_frame = ttk.Frame(left)
-        controls_frame.grid(row=1, column=0, sticky='ew', padx=10)
 
+        # Environment-specific controls (to the right of canvas, fixed size)
+        controls_env = ttk.Frame(env_frame)
+        env_frame.columnconfigure(1, weight=0)
+        controls_env.grid(row=0, column=1, sticky='nw', padx=(8,6), pady=6)
+
+        # Controls panel (below Environment) with buttons
+        controls_frame = ttk.LabelFrame(self, text='Controls', padding=6)
+        controls_frame.grid(row=1, column=0, sticky='nsew', padx=8, pady=(0,4))
+        controls_frame.columnconfigure(0, weight=1)
+
+        # Current State panel (below Controls, left of Training Parameters)
+        current_state = ttk.LabelFrame(self, text='Current State', padding=6)
+        current_state.grid(row=2, column=0, sticky='nsew', padx=8, pady=(0,8))
+        current_state.columnconfigure(0, weight=1)
+        # Single-line current state label (updated in draw_grid)
+        self.state_line_label = ttk.Label(current_state, text='')
+        self.state_line_label.grid(row=0, column=0, sticky='w', padx=2, pady=1)
+        # live counters (episode/step) used to populate the state line
+        self.current_episode = 0
+        self.current_step = 0
+
+        # Training parameters panel (to the right of Controls)
+        training_params = ttk.LabelFrame(self, text='Training Parameters', padding=6)
+        # keep this frame as tight as possible: don't expand to fill column
+        training_params.grid(row=1, column=1, rowspan=2, sticky='ne', padx=8, pady=(0,8))
+        training_params.columnconfigure(0, weight=0)
+
+        # bind canvas mouse events
         self.canvas.bind('<ButtonPress-1>', self._on_press)
         self.canvas.bind('<B1-Motion>', self._on_motion)
         self.canvas.bind('<ButtonRelease-1>', self._on_release)
@@ -91,178 +141,200 @@ class GridWorldGUI(tk.Tk):
         self.canvas.bind('<Leave>', lambda e: self.canvas.delete('hover'))
         self.draw_grid()
 
-        # Controls (placed below the canvas)
+        # Controls (placed inside controls_env)
         row = 0
-        # Grid size inputs
-        ttk.Label(controls_frame, text='grid M (cols)').grid(row=row, column=0, sticky='w')
+        ttk.Label(controls_env, text='grid M (cols)').grid(row=row, column=0, sticky='w')
         self.grid_M_var = tk.IntVar(value=self.grid_obj.M)
-        grid_m_e = ttk.Entry(controls_frame, textvariable=self.grid_M_var, width=6)
+        grid_m_e = ttk.Entry(controls_env, textvariable=self.grid_M_var, width=6)
         grid_m_e.grid(row=row, column=1, sticky='w')
         Tooltip(grid_m_e, 'Number of columns (M)')
 
         row += 1
-        ttk.Label(controls_frame, text='grid N (rows)').grid(row=row, column=0, sticky='w')
+        ttk.Label(controls_env, text='grid N (rows)').grid(row=row, column=0, sticky='w')
         self.grid_N_var = tk.IntVar(value=self.grid_obj.N)
-        grid_n_e = ttk.Entry(controls_frame, textvariable=self.grid_N_var, width=6)
+        grid_n_e = ttk.Entry(controls_env, textvariable=self.grid_N_var, width=6)
         grid_n_e.grid(row=row, column=1, sticky='w')
         Tooltip(grid_n_e, 'Number of rows (N)')
 
         row += 1
-        ttk.Label(controls_frame, text='start x,y').grid(row=row, column=0, sticky='w')
+        ttk.Label(controls_env, text='start x,y').grid(row=row, column=0, sticky='w')
         self.start_x_var = tk.IntVar(value=self.grid_obj.start[0])
         self.start_y_var = tk.IntVar(value=self.grid_obj.start[1])
-        start_x_e = ttk.Entry(controls_frame, textvariable=self.start_x_var, width=4)
+        start_x_e = ttk.Entry(controls_env, textvariable=self.start_x_var, width=4)
         start_x_e.grid(row=row, column=1, sticky='w')
-        start_y_e = ttk.Entry(controls_frame, textvariable=self.start_y_var, width=4)
+        start_y_e = ttk.Entry(controls_env, textvariable=self.start_y_var, width=4)
         start_y_e.grid(row=row, column=1, sticky='e')
         Tooltip(start_x_e, 'Start X coordinate')
         Tooltip(start_y_e, 'Start Y coordinate')
 
         row += 1
-        ttk.Label(controls_frame, text='target x,y').grid(row=row, column=0, sticky='w')
+        ttk.Label(controls_env, text='target x,y').grid(row=row, column=0, sticky='w')
         self.target_x_var = tk.IntVar(value=self.grid_obj.target[0])
         self.target_y_var = tk.IntVar(value=self.grid_obj.target[1])
-        target_x_e = ttk.Entry(controls_frame, textvariable=self.target_x_var, width=4)
+        target_x_e = ttk.Entry(controls_env, textvariable=self.target_x_var, width=4)
         target_x_e.grid(row=row, column=1, sticky='w')
-        target_y_e = ttk.Entry(controls_frame, textvariable=self.target_y_var, width=4)
+        target_y_e = ttk.Entry(controls_env, textvariable=self.target_y_var, width=4)
         target_y_e.grid(row=row, column=1, sticky='e')
         Tooltip(target_x_e, 'Target X coordinate')
         Tooltip(target_y_e, 'Target Y coordinate')
 
         row += 1
-        btn_apply = ttk.Button(controls_frame, text='Apply grid', command=self._apply_grid_settings)
-        btn_apply.grid(row=row, column=0, columnspan=2, pady=3, sticky='ew')
+        btn_apply = ttk.Button(controls_env, text='Apply grid', command=self._apply_grid_settings)
+        btn_apply.grid(row=row, column=0, columnspan=1, pady=3, sticky='w')
         Tooltip(btn_apply, 'Apply grid size and start/target positions')
-        # Reset map button (placed below Apply) to clear drawn agent paths and reset agent
-        reset_btn = ttk.Button(controls_frame, text='Reset map', command=self._reset_map)
-        reset_btn.grid(row=row+1, column=0, columnspan=2, sticky='ew', pady=(6, 0))
+        reset_btn = ttk.Button(controls_env, text='Reset map', command=self._reset_map)
+        reset_btn.grid(row=row, column=1, columnspan=1, sticky='w', padx=(8,0))
         Tooltip(reset_btn, 'Clear agent path on the map and place agent at start')
 
-        # Blocked-field inputs placed next to grid inputs
-        ttk.Label(controls_frame, text='blocked x').grid(row=0, column=2, sticky='w', padx=(10, 0))
+        # Blocked-field inputs placed to the right within controls_env
+        ttk.Label(controls_env, text='blocked x').grid(row=0, column=2, sticky='w', padx=(10, 0))
         self.blocked_x_var = tk.IntVar(value=0)
-        blocked_x_e = ttk.Entry(controls_frame, textvariable=self.blocked_x_var, width=6)
+        blocked_x_e = ttk.Entry(controls_env, textvariable=self.blocked_x_var, width=6)
         blocked_x_e.grid(row=0, column=3, sticky='w')
         Tooltip(blocked_x_e, 'Blocked field X coordinate')
 
-        ttk.Label(controls_frame, text='blocked y').grid(row=1, column=2, sticky='w', padx=(10, 0))
+        ttk.Label(controls_env, text='blocked y').grid(row=1, column=2, sticky='w', padx=(10, 0))
         self.blocked_y_var = tk.IntVar(value=0)
-        blocked_y_e = ttk.Entry(controls_frame, textvariable=self.blocked_y_var, width=6)
+        blocked_y_e = ttk.Entry(controls_env, textvariable=self.blocked_y_var, width=6)
         blocked_y_e.grid(row=1, column=3, sticky='w')
         Tooltip(blocked_y_e, 'Blocked field Y coordinate')
 
-        # Add blocked button
-        add_btn = ttk.Button(controls_frame, text='Add blocked', command=self._add_blocked_from_input)
-        add_btn.grid(row=2, column=2, columnspan=2, sticky='ew', padx=(10,0))
+        add_btn = ttk.Button(controls_env, text='Add blocked', command=self._add_blocked_from_input)
+        add_btn.grid(row=2, column=2, columnspan=2, sticky='w', padx=(10,0))
         Tooltip(add_btn, 'Add a blocked field coordinate')
 
-        # Blocked listbox below inputs
-        self.blocked_listbox = tk.Listbox(controls_frame, height=4)
+        self.blocked_listbox = tk.Listbox(controls_env, height=4)
         self.blocked_listbox.grid(row=3, column=2, columnspan=2, rowspan=3, sticky='nsew', padx=(10,0))
-        # fill initial blocked list
         self._refresh_blocked_listbox()
 
-        # Remove selected blocked button
-        remove_btn = ttk.Button(controls_frame, text='Remove selected', command=self._remove_selected_blocked)
-        remove_btn.grid(row=6, column=2, columnspan=2, sticky='ew', padx=(10,0), pady=(4,0))
+        remove_btn = ttk.Button(controls_env, text='Remove selected', command=self._remove_selected_blocked)
+        remove_btn.grid(row=6, column=2, columnspan=2, sticky='w', padx=(10,0), pady=(4,0))
         Tooltip(remove_btn, 'Remove selected blocked field from the list')
 
-        
-
-        # polish fonts and spacing
+        # polish fonts and spacing for env controls
         try:
             default_font = tkfont.nametofont('TkDefaultFont')
             default_font.configure(size=10)
         except Exception:
             default_font = None
-        for child in controls_frame.winfo_children():
+        for child in controls_env.winfo_children():
             try:
-                child.grid_configure(padx=3, pady=3)
+                child.grid_configure(padx=1, pady=1)
             except Exception:
                 pass
 
-        row += 1
-        ttk.Label(right, text='alpha').grid(row=row, column=0, sticky='w')
+        # Training parameters (placed into training_params frame on the right)
+        row = 0
+        ttk.Label(training_params, text='alpha').grid(row=row, column=0, sticky='w')
         self.alpha_var = tk.DoubleVar(value=0.5)
-        alpha_e = ttk.Entry(right, textvariable=self.alpha_var, width=10)
-        alpha_e.grid(row=row, column=1)
+        alpha_e = ttk.Entry(training_params, textvariable=self.alpha_var, width=10)
+        alpha_e.grid(row=row, column=1, sticky='e')
         Tooltip(alpha_e, 'Learning rate for Q-learning updates')
 
         row += 1
-        ttk.Label(right, text='gamma').grid(row=row, column=0, sticky='w')
+        ttk.Label(training_params, text='gamma').grid(row=row, column=0, sticky='w')
         self.gamma_var = tk.DoubleVar(value=0.99)
-        gamma_e = ttk.Entry(right, textvariable=self.gamma_var, width=10)
-        gamma_e.grid(row=row, column=1)
+        gamma_e = ttk.Entry(training_params, textvariable=self.gamma_var, width=10)
+        gamma_e.grid(row=row, column=1, sticky='e')
         Tooltip(gamma_e, 'Discount factor for future rewards')
 
         row += 1
-        ttk.Label(right, text='max steps/ep').grid(row=row, column=0, sticky='w')
+        ttk.Label(training_params, text='max steps/ep').grid(row=row, column=0, sticky='w')
         self.max_steps_var = tk.IntVar(value=20)
-        max_e = ttk.Entry(right, textvariable=self.max_steps_var, width=10)
-        max_e.grid(row=row, column=1)
+        max_e = ttk.Entry(training_params, textvariable=self.max_steps_var, width=10)
+        max_e.grid(row=row, column=1, sticky='e')
         Tooltip(max_e, 'Maximum steps allowed in a single episode')
 
         row += 1
-        ttk.Label(right, text='episodes').grid(row=row, column=0, sticky='w')
+        ttk.Label(training_params, text='episodes').grid(row=row, column=0, sticky='w')
         self.episodes_var = tk.IntVar(value=100)
-        episodes_e = ttk.Entry(right, textvariable=self.episodes_var, width=10)
-        episodes_e.grid(row=row, column=1)
+        episodes_e = ttk.Entry(training_params, textvariable=self.episodes_var, width=10)
+        episodes_e.grid(row=row, column=1, sticky='e')
         Tooltip(episodes_e, 'Number of episodes to train')
 
         row += 1
-        # Policy selection
-        self.policy_var = tk.StringVar(value='q')
-        radio_q = ttk.Radiobutton(right, text='Q-learning', variable=self.policy_var, value='q')
-        radio_q.grid(row=row, column=0)
-        radio_mc = ttk.Radiobutton(right, text='Monte Carlo', variable=self.policy_var, value='mc')
-        radio_mc.grid(row=row, column=1)
-        Tooltip(radio_q, 'Select Q-learning policy')
-        Tooltip(radio_mc, 'Select Monte Carlo policy')
+        ttk.Label(training_params, text='epsilon min').grid(row=row, column=0, sticky='w')
+        self.epsilon_min_var = tk.DoubleVar(value=0.1)
+        eps_min_e = ttk.Entry(training_params, textvariable=self.epsilon_min_var, width=10)
+        eps_min_e.grid(row=row, column=1, sticky='e')
+        Tooltip(eps_min_e, 'Minimum exploration epsilon (used for single-step/single-episode and Q-learning)')
 
         row += 1
-        btn_step = ttk.Button(right, text='Run single step', command=self._run_single_step)
-        btn_step.grid(row=row, column=0, columnspan=2, pady=3, sticky='ew')
+        ttk.Label(training_params, text='epsilon max').grid(row=row, column=0, sticky='w')
+        self.epsilon_max_var = tk.DoubleVar(value=0.9)
+        eps_max_e = ttk.Entry(training_params, textvariable=self.epsilon_max_var, width=10)
+        eps_max_e.grid(row=row, column=1, sticky='e')
+        Tooltip(eps_max_e, 'Maximum exploration epsilon (used for Monte Carlo training)')
+
+        row += 1
+        # Policy selection (label + dropdown)
+        self.policy_var = tk.StringVar(value='Q-learning')
+        ttk.Label(training_params, text='policy').grid(row=row, column=0, sticky='w')
+        policy_box = ttk.Combobox(training_params, textvariable=self.policy_var, values=['Q-learning', 'Monte Carlo', 'SARSA', 'Expected SARSA'], state='readonly', width=18)
+        policy_box.grid(row=row, column=1, sticky='e')
+        Tooltip(policy_box, 'Select learning policy')
+        # tighten spacing in training_params (small horizontal gap)
+        try:
+            for child in training_params.winfo_children():
+                try:
+                    child.grid_configure(padx=(0,2), pady=1)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Controls buttons arranged in 2 columns x 4 rows
+        controls_frame.columnconfigure(0, weight=1)
+        controls_frame.columnconfigure(1, weight=1)
+        # Row 0
+        btn_step = ttk.Button(controls_frame, text='Run single step', command=self._run_single_step)
+        btn_step.grid(row=0, column=0, padx=4, pady=3, sticky='ew')
+        btn_show_val = ttk.Button(controls_frame, text='Show Value Table', command=self._show_value_table)
+        btn_show_val.grid(row=0, column=1, padx=4, pady=3, sticky='ew')
         Tooltip(btn_step, 'Execute a single environment step and update policy')
-
-        row += 1
-        btn_episode = ttk.Button(right, text='Run single episode', command=self._run_single_episode)
-        btn_episode.grid(row=row, column=0, columnspan=2, pady=3, sticky='ew')
-        Tooltip(btn_episode, 'Run one episode of max steps and update policy')
-
-        row += 1
-        btn_train = ttk.Button(right, text='Train and Run', command=self._train_and_run)
-        btn_train.grid(row=row, column=0, columnspan=2, pady=3, sticky='ew')
-        Tooltip(btn_train, 'Train selected policy for configured episodes')
-
-        row += 1
-        btn_reset_all = ttk.Button(right, text='Reset All', command=self._reset_all)
-        btn_reset_all.grid(row=row, column=0, columnspan=2, pady=3, sticky='ew')
-        Tooltip(btn_reset_all, 'Stop training (if running), clear plot and reset map')
-
-        row += 1
-        self.live_plot_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(right, text='Live plot', variable=self.live_plot_var).grid(row=row, column=0, columnspan=2, sticky='w')
-
-        row += 1
-        btn_show_val = ttk.Button(right, text='Show Value Table', command=self._show_value_table)
-        btn_show_val.grid(row=row, column=0, pady=3, sticky='ew')
         Tooltip(btn_show_val, 'Show state-value table (Monte Carlo)')
-        btn_show_q = ttk.Button(right, text='Show Q-table', command=self._show_q_table)
-        btn_show_q.grid(row=row, column=1, pady=3, sticky='ew')
+        # Row 1
+        btn_episode = ttk.Button(controls_frame, text='Run single episode', command=self._run_single_episode)
+        btn_episode.grid(row=1, column=0, padx=4, pady=3, sticky='ew')
+        btn_show_q = ttk.Button(controls_frame, text='Show Q-table', command=self._show_q_table)
+        btn_show_q.grid(row=1, column=1, padx=4, pady=3, sticky='ew')
+        Tooltip(btn_episode, 'Run one episode of max steps and update policy')
         Tooltip(btn_show_q, 'Show Q-table (Q-learning)')
-
-        row += 1
-        btn_save = ttk.Button(right, text='Save samplings CSV', command=self._save_csv)
-        btn_save.grid(row=row, column=0, columnspan=2, pady=3, sticky='ew')
+        # Row 2
+        btn_train = ttk.Button(controls_frame, text='Train and Run', command=self._train_and_run)
+        btn_train.grid(row=2, column=0, padx=4, pady=3, sticky='ew')
+        btn_save = ttk.Button(controls_frame, text='Save samplings CSV', command=self._save_csv)
+        btn_save.grid(row=2, column=1, padx=4, pady=3, sticky='ew')
+        Tooltip(btn_train, 'Train selected policy for configured episodes')
         Tooltip(btn_save, 'Save sampled transitions to CSV')
+        # Row 3
+        btn_reset_all = ttk.Button(controls_frame, text='Reset All', command=self._reset_all)
+        btn_reset_all.grid(row=3, column=0, padx=4, pady=3, sticky='ew')
+        btn_save_plot = ttk.Button(controls_frame, text='Save Plot PNG', command=self._save_plot_png)
+        btn_save_plot.grid(row=3, column=1, padx=4, pady=3, sticky='ew')
+        Tooltip(btn_reset_all, 'Stop training (if running), clear plot and reset map')
+        Tooltip(btn_save_plot, 'Save current live plot to plots/*.png')
 
-        # Plot area (enlarged: width x3, height x2)
-        fig = Figure(figsize=(18, 6), dpi=100)
+        # live plot checkbox remains in training parameters (left)
+        self.live_plot_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(training_params, text='Live plot', variable=self.live_plot_var).grid(row=8, column=0, sticky='w')
+        # reduced speed toggle (right of live plot) - default active
+        self.reduced_speed_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(training_params, text='reduced speed', variable=self.reduced_speed_var).grid(row=8, column=1, sticky='e')
+
+        # Plot area (bottom) as its own labeled frame that resizes
+        plot_frame = ttk.LabelFrame(self, text='Live Plot', padding=6)
+        plot_frame.grid(row=3, column=0, columnspan=2, sticky='nsew', padx=8, pady=(0,8))
+        plot_frame.rowconfigure(0, weight=1)
+        plot_frame.columnconfigure(0, weight=1)
+
+        fig = Figure(figsize=(8, 3), dpi=100)
         self.ax = fig.add_subplot(111)
         self.ax.tick_params(labelsize=9)
-        self.canvas_fig = FigureCanvasTkAgg(fig, master=right)
-        self.canvas_fig.get_tk_widget().grid(row=row+1, column=0, columnspan=2, sticky='nsew')
-        right.rowconfigure(row+1, weight=1)
+        self.canvas_fig = FigureCanvasTkAgg(fig, master=plot_frame)
+        self.canvas_fig.get_tk_widget().grid(row=0, column=0, sticky='nsew')
+        # timestamp of last plot update to throttle frequent redraws
+        self._last_plot_update = 0.0
         # plotting state: keep past runs
         self.plot_runs = []  # each: dict(rewards, label, color, visible)
         self._color_cycle = itertools.cycle(matplotlib.cm.get_cmap('tab10').colors)
@@ -272,14 +344,68 @@ class GridWorldGUI(tk.Tk):
         except Exception:
             pass
 
+        # refresh live plot when window resized (debounced)
+        try:
+            self.bind('<Configure>', self._on_root_configure)
+        except Exception:
+            pass
+
+        # double initial width after layout computed (cap to screen)
+        try:
+            self.update_idletasks()
+            req_w = self.winfo_reqwidth()
+            req_h = self.winfo_reqheight()
+            screen_w = self.winfo_screenwidth()
+            screen_h = self.winfo_screenheight()
+            new_w = min(req_w * 2, screen_w - 40)
+            new_h = min(req_h, screen_h - 80)
+            self.geometry(f'{new_w}x{new_h}')
+        except Exception:
+            pass
+
+    def _on_root_configure(self, event):
+        # debounce configure events and refresh plot after resize
+        try:
+            if self._resize_after_id:
+                try:
+                    self.after_cancel(self._resize_after_id)
+                except Exception:
+                    pass
+            self._resize_after_id = self.after(150, lambda: self._update_plot())
+        except Exception:
+            pass
+
+    def _set_current_counters(self, ep: int, step: int):
+        """Set current episode/step on the GUI thread and refresh display."""
+        try:
+            # update counters but avoid expensive full redraw; update label only
+            self.current_episode = ep
+            self.current_step = step
+            if hasattr(self, 'state_line_label'):
+                status = 'Training:' if getattr(self, 'training', False) else 'Idle:'
+                try:
+                    # space-padded width 4 formatting to keep spacing stable
+                    self.state_line_label.config(text=f'{status} step: {self.current_step:4d}  episode: {self.current_episode:4d}')
+                except Exception:
+                    # fallback simple update
+                    self.state_line_label.config(text=f'{status} step: {self.current_step}  episode: {self.current_episode}')
+        except Exception:
+            pass
+
     def draw_grid(self):
         self.canvas.delete('all')
-        w = int(self.canvas['width'])
-        h = int(self.canvas['height'])
         cols = self.grid_obj.M
         rows = self.grid_obj.N
-        cw = w / cols
-        ch = h / rows
+        cw = self.cell_size
+        ch = self.cell_size
+        total_w = int(cols * cw)
+        total_h = int(rows * ch)
+        # update scroll region so canvas becomes scrollable when grid larger than viewport
+        try:
+            self.canvas.configure(scrollregion=(0, 0, total_w, total_h))
+        except Exception:
+            pass
+        # draw cells at fixed pixel size
         for x in range(cols):
             for y in range(rows):
                 x0 = x * cw
@@ -291,10 +417,11 @@ class GridWorldGUI(tk.Tk):
 
         # target (use anti-aliased image if Pillow available)
         tx, ty = self.grid_obj.target
-        x0 = tx * cw + 4
-        y0 = ty * ch + 4
-        x1 = (tx + 1) * cw - 4
-        y1 = (ty + 1) * ch - 4
+        margin = max(2, int(min(cw, ch) * 0.12))
+        x0 = tx * cw + margin
+        y0 = ty * ch + margin
+        x1 = (tx + 1) * cw - margin
+        y1 = (ty + 1) * ch - margin
         tw = int(x1 - x0)
         th = int(y1 - y0)
         if PIL_AVAILABLE and tw > 0 and th > 0:
@@ -310,8 +437,9 @@ class GridWorldGUI(tk.Tk):
             self._create_rounded_rect(x0, y0, x1, y1, r=min(cw, ch) * 0.2, fill='green')
         # agent (use anti-aliased image if available)
         ax, ay = self.grid_obj.start
-        aw = int(cw - 20)
-        ah = int(ch - 20)
+        margin = max(2, int(min(cw, ch) * 0.15))
+        aw = int(cw - 2 * margin)
+        ah = int(ch - 2 * margin)
         if PIL_AVAILABLE and aw > 0 and ah > 0:
             img = self._create_agent_image(max(4, aw), max(4, ah))
             self._agent_img = ImageTk.PhotoImage(img, master=self)
@@ -319,7 +447,7 @@ class GridWorldGUI(tk.Tk):
             cy = (ay * ch) + ch / 2
             self.canvas.create_image(cx, cy, image=self._agent_img)
         else:
-            self.canvas.create_oval(ax * cw + 10, ay * ch + 10, (ax + 1) * cw - 10, (ay + 1) * ch - 10,
+            self.canvas.create_oval(ax * cw + margin, ay * ch + margin, (ax + 1) * cw - margin, (ay + 1) * ch - margin,
                                     fill='blue')
         # draw agent path if present
         try:
@@ -341,6 +469,16 @@ class GridWorldGUI(tk.Tk):
                 except Exception:
                     # fallback to simple line
                     self.canvas.create_line(x0, y0, x1, y1, fill='red', width=2, tags='agent_path')
+        # update current state single-line label if present
+        try:
+            if hasattr(self, 'state_line_label'):
+                ep = int(getattr(self, 'current_episode', 0) or 0)
+                st = int(getattr(self, 'current_step', 0) or 0)
+                status = 'Training:' if getattr(self, 'training', False) else 'Idle:'
+                # fixed-width space-padded 4-digit numbers to keep spacing stable
+                self.state_line_label.config(text=f'{status} step: {st:4d}  episode: {ep:4d}')
+        except Exception:
+            pass
 
     def _create_rounded_rect(self, x0, y0, x1, y1, r=10, **kwargs):
         # draw a rounded rectangle by composing arcs and rectangles
@@ -496,14 +634,15 @@ class GridWorldGUI(tk.Tk):
         self.draw_grid()
 
     def _canvas_pos_to_cell(self, xpix, ypix):
-        w = int(self.canvas['width'])
-        h = int(self.canvas['height'])
+        # map widget coordinates to canvas coordinates (account for scrolling)
+        cx = self.canvas.canvasx(xpix)
+        cy = self.canvas.canvasy(ypix)
         cols = self.grid_obj.M
         rows = self.grid_obj.N
-        cw = w / cols
-        ch = h / rows
-        x = int(xpix // cw)
-        y = int(ypix // ch)
+        cw = self.cell_size
+        ch = self.cell_size
+        x = int(cx // cw)
+        y = int(cy // ch)
         return max(0, min(cols - 1, x)), max(0, min(rows - 1, y))
 
     def _on_canvas_click(self, event):
@@ -531,31 +670,82 @@ class GridWorldGUI(tk.Tk):
         if not self.dragging:
             return
         cell = self._canvas_pos_to_cell(event.x, event.y)
-        w = int(self.canvas['width'])
-        h = int(self.canvas['height'])
         cols = self.grid_obj.M
         rows = self.grid_obj.N
-        cw = w / cols
-        ch = h / rows
+        cw = self.cell_size
+        ch = self.cell_size
         # draw or update preview
         if self.dragging == 'agent':
-            x0 = cell[0] * cw + 10
-            y0 = cell[1] * ch + 10
-            x1 = (cell[0] + 1) * cw - 10
-            y1 = (cell[1] + 1) * ch - 10
-            if not self.canvas.find_withtag('preview'):
-                self.canvas.create_oval(x0, y0, x1, y1, fill='blue', outline='', stipple='gray50', tags='preview')
-            else:
-                self.canvas.coords('preview', x0, y0, x1, y1)
+            margin = max(2, int(min(cw, ch) * 0.15))
+            x0 = cell[0] * cw + margin
+            y0 = cell[1] * ch + margin
+            x1 = (cell[0] + 1) * cw - margin
+            y1 = (cell[1] + 1) * ch - margin
+            # use the agent image for preview (keep PhotoImage ref to avoid GC)
+            try:
+                aw = int(x1 - x0)
+                ah = int(y1 - y0)
+                if PIL_AVAILABLE and aw > 0 and ah > 0:
+                    img = self._create_agent_image(max(4, aw), max(4, ah))
+                    self._preview_agent_img = ImageTk.PhotoImage(img, master=self)
+                    cx = cell[0] * cw + cw / 2
+                    cy = cell[1] * ch + ch / 2
+                    if not self.canvas.find_withtag('preview'):
+                        self.canvas.create_image(cx, cy, image=self._preview_agent_img, tags='preview')
+                    else:
+                        # move and update image
+                        items = self.canvas.find_withtag('preview')
+                        for it in items:
+                            try:
+                                self.canvas.coords(it, cx, cy)
+                                self.canvas.itemconfig(it, image=self._preview_agent_img)
+                            except Exception:
+                                pass
+                else:
+                    if not self.canvas.find_withtag('preview'):
+                        self.canvas.create_oval(x0, y0, x1, y1, fill='blue', outline='', stipple='gray50', tags='preview')
+                    else:
+                        self.canvas.coords('preview', x0, y0, x1, y1)
+            except Exception:
+                # fallback to simple oval preview
+                if not self.canvas.find_withtag('preview'):
+                    self.canvas.create_oval(x0, y0, x1, y1, fill='blue', outline='', stipple='gray50', tags='preview')
+                else:
+                    self.canvas.coords('preview', x0, y0, x1, y1)
         elif self.dragging == 'target':
-            x0 = cell[0] * cw + 4
-            y0 = cell[1] * ch + 4
-            x1 = (cell[0] + 1) * cw - 4
-            y1 = (cell[1] + 1) * ch - 4
-            if not self.canvas.find_withtag('preview'):
-                self.canvas.create_rectangle(x0, y0, x1, y1, fill='green', outline='', stipple='gray50', tags='preview')
-            else:
-                self.canvas.coords('preview', x0, y0, x1, y1)
+            margin = max(2, int(min(cw, ch) * 0.12))
+            x0 = cell[0] * cw + margin
+            y0 = cell[1] * ch + margin
+            x1 = (cell[0] + 1) * cw - margin
+            y1 = (cell[1] + 1) * ch - margin
+            try:
+                tw = int(x1 - x0)
+                th = int(y1 - y0)
+                if PIL_AVAILABLE and tw > 0 and th > 0:
+                    img = self._create_target_image(max(4, tw), max(4, th))
+                    self._preview_target_img = ImageTk.PhotoImage(img, master=self)
+                    cx = cell[0] * cw + cw / 2
+                    cy = cell[1] * ch + ch / 2
+                    if not self.canvas.find_withtag('preview'):
+                        self.canvas.create_image(cx, cy, image=self._preview_target_img, tags='preview')
+                    else:
+                        items = self.canvas.find_withtag('preview')
+                        for it in items:
+                            try:
+                                self.canvas.coords(it, cx, cy)
+                                self.canvas.itemconfig(it, image=self._preview_target_img)
+                            except Exception:
+                                pass
+                else:
+                    if not self.canvas.find_withtag('preview'):
+                        self.canvas.create_rectangle(x0, y0, x1, y1, fill='green', outline='', stipple='gray50', tags='preview')
+                    else:
+                        self.canvas.coords('preview', x0, y0, x1, y1)
+            except Exception:
+                if not self.canvas.find_withtag('preview'):
+                    self.canvas.create_rectangle(x0, y0, x1, y1, fill='green', outline='', stipple='gray50', tags='preview')
+                else:
+                    self.canvas.coords('preview', x0, y0, x1, y1)
 
     def _on_hover(self, event):
         # show a hover preview indicating if adding a block here would disconnect start->target
@@ -567,12 +757,10 @@ class GridWorldGUI(tk.Tk):
         if cell == self.grid_obj.start or cell == self.grid_obj.target:
             self.canvas.delete('hover')
             return
-        w = int(self.canvas['width'])
-        h = int(self.canvas['height'])
         cols = self.grid_obj.M
         rows = self.grid_obj.N
-        cw = w / cols
-        ch = h / rows
+        cw = self.cell_size
+        ch = self.cell_size
         x0 = cell[0] * cw
         y0 = cell[1] * ch
         x1 = x0 + cw
@@ -637,6 +825,16 @@ class GridWorldGUI(tk.Tk):
 
         # clear preview and redraw
         self.canvas.delete('preview')
+        try:
+            if hasattr(self, '_preview_agent_img'):
+                del self._preview_agent_img
+        except Exception:
+            pass
+        try:
+            if hasattr(self, '_preview_target_img'):
+                del self._preview_target_img
+        except Exception:
+            pass
         self.dragging = None
         self.draw_grid()
 
@@ -657,7 +855,7 @@ class GridWorldGUI(tk.Tk):
 
         s = self.grid_obj.start
         # epsilon-greedy selection for single-step (small exploration)
-        eps = 0.1
+        eps = self.epsilon_min_var.get()
         if hasattr(policy, 'best_action'):
             if random.random() < eps:
                 a = random.choice(list(self.grid_obj.ACTIONS.keys()))
@@ -676,6 +874,15 @@ class GridWorldGUI(tk.Tk):
         self._ongoing_transitions.append((s, a, r, s2, done))
         self._ongoing_rewards.append(r)
         self._ongoing_states.append(s2)
+
+        # update live counters for single-step
+        try:
+            # episode remains as-is (0 or user-set); step is length of transitions
+            self.current_step = len(self._ongoing_transitions)
+            if not getattr(self, 'current_episode', None):
+                self.current_episode = 0
+        except Exception:
+            pass
 
         # advance agent position
         try:
@@ -712,7 +919,13 @@ class GridWorldGUI(tk.Tk):
         self._ongoing_rewards = None
         self._ongoing_transitions = None
         policy = self._create_policy()
-        transitions, total = self.trainer.run_episode(policy, epsilon=0.1, max_steps=self.max_steps_var.get())
+        # set current episode/step for UI (single episode run)
+        try:
+            self.current_episode = 1
+            self.current_step = 0
+        except Exception:
+            pass
+        transitions, total = self.trainer.run_episode(policy, epsilon=self.epsilon_min_var.get(), max_steps=self.max_steps_var.get())
         # animate full episode
         self._agent_path = [self.grid_obj.start]
         self._animate_transitions(transitions, reset_before=False)
@@ -729,39 +942,73 @@ class GridWorldGUI(tk.Tk):
             episodes = self.episodes_var.get()
             alpha = self.alpha_var.get()
             gamma = self.gamma_var.get()
-            # Monte Carlo needs longer episodes and more exploration
-            if self.policy_var.get() == 'mc':
-                epsilon = 0.3
-                max_steps = max(self.max_steps_var.get(), 200)
+            # Read epsilon bounds from GUI: use epsilon_max for Monte Carlo, epsilon_min otherwise
+            if self.policy_var.get() == 'Monte Carlo':
+                epsilon = self.epsilon_max_var.get()
             else:
-                epsilon = 0.1
-                max_steps = self.max_steps_var.get()
+                epsilon = self.epsilon_min_var.get()
+            max_steps = self.max_steps_var.get()
             for ep in range(episodes):
                 if self._stop_requested:
                     break
-                transitions, total = self.trainer.run_episode(policy, epsilon=epsilon, max_steps=max_steps)
+                # update current episode/step via GUI thread helper so it redraws
+                try:
+                    self.after(0, self._set_current_counters, ep + 1, 0)
+                except Exception:
+                    pass
+                # provide a progress callback so per-step updates refresh the UI
+                try:
+                    progress_cb = (lambda step, e=ep: self.after(0, self._set_current_counters, e + 1, step + 1))
+                except Exception:
+                    progress_cb = None
+                transitions, total = self.trainer.run_episode(policy, epsilon=epsilon, max_steps=max_steps, progress_callback=progress_cb)
                 rewards.append(total)
                 if self.live_plot_var.get():
                     self.after(0, lambda r=rewards.copy(): self._update_plot(current_rewards=r))
+                # optional reduced-speed delay to make progress observable
+                try:
+                    if getattr(self, 'reduced_speed_var', None) and self.reduced_speed_var.get():
+                        time.sleep(0.033)
+                except Exception:
+                    pass
             # final: register run and redraw (mark if stopped)
-            pol = 'Q-learning' if self.policy_var.get() == 'q' else 'MonteCarlo'
+            pol = self.policy_var.get()
             status = 'Stopped' if self._stop_requested else 'Completed'
             label = f"{pol} | α={alpha:.2f}, γ={gamma:.2f}, eps={epsilon}, ep={episodes} [{status}]"
             if rewards:
                 self.after(0, lambda r=rewards, lab=label: self._add_plot_run(r, lab))
+            # clear current episode/step after training finishes
+            try:
+                self.after(0, self._set_current_counters, 0, 0)
+            except Exception:
+                pass
             self.training = False
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _create_policy(self):
-        if self.policy_var.get() == 'q':
+        p = self.policy_var.get()
+        if p == 'Q-learning':
             q = QLearningAgent(self.grid_obj, alpha=self.alpha_var.get(), gamma=self.gamma_var.get())
             self.agent_instance = q
             return q
-        else:
+        elif p == 'Monte Carlo':
             mc = MonteCarloAgent(self.grid_obj, gamma=self.gamma_var.get())
             self.agent_instance = mc
             return mc
+        elif p == 'SARSA':
+            sarsa = SARSAAgent(self.grid_obj, alpha=self.alpha_var.get(), gamma=self.gamma_var.get())
+            self.agent_instance = sarsa
+            return sarsa
+        elif p == 'Expected SARSA':
+            esarsa = ExpectedSarsaAgent(self.grid_obj, alpha=self.alpha_var.get(), gamma=self.gamma_var.get())
+            self.agent_instance = esarsa
+            return esarsa
+        else:
+            # fallback to Q-learning
+            q = QLearningAgent(self.grid_obj, alpha=self.alpha_var.get(), gamma=self.gamma_var.get())
+            self.agent_instance = q
+            return q
 
     def _reset_all(self):
         # request stop for running training
@@ -809,6 +1056,11 @@ class GridWorldGUI(tk.Tk):
                 self._agent_path = [s2]
             else:
                 self._agent_path.append(s2)
+            # update current step counter for live display
+            try:
+                self.current_step = idx + 1
+            except Exception:
+                pass
             self.draw_grid()
             idx += 1
             self.after(delay, step)
@@ -894,6 +1146,16 @@ class GridWorldGUI(tk.Tk):
         self.canvas_fig.draw()
 
     def _update_plot(self, current_rewards=None):
+        # throttle frequent plot updates to avoid UI slowdowns
+        try:
+            now = time.time()
+            last = getattr(self, '_last_plot_update', 0.0) or 0.0
+            # minimum interval 150 ms
+            if now - last < 0.15:
+                return
+            self._last_plot_update = now
+        except Exception:
+            pass
         # keep existing runs and optionally overlay current run
         self._redraw_all_plots(current_rewards=current_rewards)
 
@@ -910,8 +1172,8 @@ class GridWorldGUI(tk.Tk):
         self._redraw_all_plots()
 
     def _show_q_table(self):
-        if not isinstance(self.agent_instance, QLearningAgent):
-            tk.messagebox.showinfo('Q-table', 'Q-table only available for Q-learning agent')
+        if not hasattr(self.agent_instance, 'get_q'):
+            tk.messagebox.showinfo('Q-table', 'Q-table only available for agents with Q(s,a) (Q-learning/SARSA/Expected SARSA)')
             return
         top = tk.Toplevel(self)
         top.title('Q-table')
@@ -992,7 +1254,29 @@ class GridWorldGUI(tk.Tk):
         policy = self._create_policy()
         # use Trainer.train which supports save_csv base name
         def worker():
-            self.trainer.train(policy, num_episodes=self.episodes_var.get(), max_steps=self.max_steps_var.get(), epsilon=0.1, save_csv=base)
+            self.trainer.train(policy, num_episodes=self.episodes_var.get(), max_steps=self.max_steps_var.get(), epsilon=self.epsilon_min_var.get(), save_csv=base)
             self.after(0, lambda: tk.messagebox.showinfo('Saved', f'Samplings saved with base {base}'))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _save_plot_png(self):
+        # create plots directory and save current matplotlib figure
+        try:
+            plots_dir = os.path.join(os.getcwd(), 'plots')
+            os.makedirs(plots_dir, exist_ok=True)
+            # gather parameter values for filename
+            policy = str(self.policy_var.get()).replace(' ', '_')
+            eps_min = str(self.epsilon_min_var.get()).replace('.', 'p')
+            eps_max = str(self.epsilon_max_var.get()).replace('.', 'p')
+            alpha = str(self.alpha_var.get()).replace('.', 'p')
+            gamma = str(self.gamma_var.get()).replace('.', 'p')
+            episodes = str(self.episodes_var.get())
+            max_steps = str(self.max_steps_var.get())
+            ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            fname = f"{policy}_epsmin{eps_min}_epsmax{eps_max}_alpha{alpha}_gamma{gamma}_ep{episodes}_max{max_steps}_{ts}.png"
+            path = os.path.join(plots_dir, fname)
+            # save figure
+            self.canvas_fig.figure.savefig(path, dpi=150)
+            tk.messagebox.showinfo('Saved', f'Plot saved to {path}')
+        except Exception as e:
+            tk.messagebox.showerror('Error', f'Failed saving plot: {e}')
