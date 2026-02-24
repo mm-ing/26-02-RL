@@ -1,113 +1,121 @@
-Implement CliffWalking RL project (Gymnasium + DQN + Double DQN)
-=================================================================
+Implement CliffWalking RL project (executable prompt)
+=====================================================
 
-Goal
+Role
 ----
-Implement a complete CliffWalking reinforcement learning project in this directory by combining requirements from `RL_initial.md` and `CliffWalking.md`.
+You are implementing a complete reinforcement-learning project in this directory using object-oriented Python and PyTorch.
 
-Create these files
-------------------
+Source specs to merge
+---------------------
+- `RL_initial.md` (general architecture, trainer/GUI/threading/tests structure)
+- `CliffWalking.md` (project-specific behavior)
+
+If any requirement conflicts, prioritize `CliffWalking.md` for project-specific choices while keeping `RL_initial.md` architecture.
+
+Project name
+------------
+- `CliffWalking`
+
+Create/Update these files
+-------------------------
 - `cliffwalking_app.py`
 - `cliffwalking_logic.py`
 - `cliffwalking_gui.py`
 - `tests/test_cliffwalking_logic.py`
 - `requirements.txt`
-- output folders: `results_csv/`, `plots/`
+- ensure output directories exist: `results_csv/`, `plots/`
 
-Implementation contract
------------------------
-Follow object-oriented design and keep behavior aligned with the two spec files.
+Core implementation requirements
+--------------------------------
+1. Environment
+   - Build environment around `gym.make('CliffWalking-v1')`.
+   - Add optional `slippery cliff` behavior (default: off) where movement can randomly deviate perpendicular to intended direction.
+   - Use pygame-based animation frames from gymnasium render mode and show them in the GUI environment panel.
 
-1) Environment and animation
-- Use `gym.make('CliffWalking-v1')` as the environment foundation.
-- Do not implement your own Grid!!!! use gymnasium
-- Implement a dedicated environment wrapper/class in `cliffwalking_logic.py`.
-- Include optional slippery cliff behavior (default: disabled): with configurable probability, apply a perpendicular action instead of intended action.
-- Keep standard CliffWalking semantics:
-   - start at bottom-left, goal at bottom-right,
-   - cliff along the bottom row between start and goal,
-   - stepping into cliff causes large negative reward and reset to start.
-- Provide data needed by GUI rendering and step-by-step animation.
-- Use pygame for animation rendering inside the environment visualization workflow (integrated with the Tkinter app lifecycle).
+2. Policies (PyTorch)
+   - Implement **vanilla DQN** class `DQNetwork`.
+   - Implement **Double DQN** class `DDQNetwork`.
+   - Suggest and implement sensible defaults, including:
+     - learning rate
+     - gamma
+     - epsilon start/end and decay
+     - replay buffer size
+     - batch size
+     - target network update frequency
+     - hidden layer width(s)
+     - activation function
+   - Use replay buffer + minibatch updates for both methods.
+   - For DDQN, use online network for action selection and target network for target value evaluation.
 
-2) Policies to implement
-- `DQNetwork`: vanilla deep Q-learning policy.
-- `DDQNetwork`: double DQN policy.
-- Suggest and implement sensible defaults for:
-   - learning rate,
-   - gamma,
-   - epsilon schedule,
-   - replay buffer size,
-   - batch size,
-   - target network sync interval,
-   - hidden layer size and activation.
-- Include replay buffer and transition structure required for DQN training.
+3. Trainer
+   - Implement `Trainer.run_episode(policy, epsilon=0.1, max_steps=1000, progress_callback=None)` and call `progress_callback(step)` every step when provided.
+   - Implement `Trainer.train(policy, num_episodes, max_steps, epsilon, save_csv=None)` and optionally save sampled transitions to CSV under `results_csv/`.
 
-3) Trainer
-- Expand `Trainer` to train both `DQNetwork` and `DDQNetwork`.
-- Implement:
-   - `run_episode(policy, epsilon=0.1, max_steps=1000, progress_callback=None)`
-   - `train(policy, num_episodes, max_steps, epsilon, save_csv=None)`
-- `progress_callback(step)` must be called each step when provided.
-- `train(...)` must optionally save sampled transitions to CSV in `results_csv/`.
+GUI requirements
+----------------
+1. Layout
+   - Use Tkinter + ttk label frames consistent with `RL_initial.md`:
+     - `Environment` (top, full width)
+     - `Controls` (left)
+     - `Current State` (below Controls)
+     - `DNN Parameters` (between `Controls` and `Training Parameters`, tight width, same height as `Training Parameters`)
+     - `Training Parameters` (right, tight width)
+     - `Live Plot` (bottom, full width)
 
-4) GUI layout and behavior (`cliffwalking_gui.py`)
-- Use Tkinter with labeled panels and match `RL_initial.md` structure.
-- Apply project-specific overrides from `CliffWalking.md`:
-   - Environment panel:
-      - Do not implement your own Grid!!!! use gymnasium
-      - show map and moving player,
-      - animate during training,
-      - add toggle `slippery cliff`.
-   - Controls panel:
-      - remove `Run single step`,
-      - keep relevant run/reset/save controls,
-      - add `Clear plots` button to clear live plot window.
-   - Add `DNN Parameters` panel between `Controls` and `Training Parameters`, tight width and same height behavior as specified.
-   - Add relevant input fields across `Training Parameters` and `DNN Parameters` (policy choice, episodes, max steps, epsilon-related settings, DQN/DDQN hyperparameters).
-   - Live plot:
-      - plot episode rewards,
-      - add moving average reward line with double line width.
-- Keep GUI responsive:
-   - training on background thread,
-   - UI updates via `after(0, ...)`,
-   - throttle plot updates around 150ms.
+2. Controls and state
+   - Provide controls to run episode/training, reset all, save samplings CSV, save plot PNG, and clear plot.
+   - Keep GUI responsive by running training in a background thread and using `after(0, ...)` for UI updates.
+   - Update current step/episode live; avoid full redraws just to update counters.
 
-5) Tests
-- Add `tests/test_cliffwalking_logic.py` covering at least:
-   - environment step/cliff/terminal behavior,
-   - `Trainer.run_episode` for both `DQNetwork` and `DDQNetwork`,
-   - one basic learning-update sanity check per policy path.
-- Use `pytest` and ensure tests pass.
+3. Environment panel
+   - Display gymnasium cliffwalking animation in the panel (pygame-rendered frames).
+   - Add a `slippery cliff` toggle in GUI.
 
-6) Dependencies
-- `requirements.txt` must include minimum runtime/test dependencies:
-   - gymnasium
-   - pygame
-   - matplotlib
-   - pillow
-   - numpy
-   - pytest
-   - torch
+4. Parameter inputs
+   - `Training Parameters` panel: include max steps, episodes, policy selector (`DQN` / `DDQN`), epsilon controls, gamma, learning rate, live plot toggle, reduced speed toggle.
+   - `DNN Parameters` panel: include replay buffer size, batch size, activation function, hidden neurons, target update frequency.
 
-Execution steps (assistant must run)
-------------------------------------
-1. Implement all required files.
-2. Install dependencies.
-3. Run `pytest -q` and fix failures.
-4. Start app with `python cliffwalking_app.py` for smoke check.
+5. Live plot
+   - Plot episode rewards for runs.
+   - Add moving average reward curve with double line width.
+   - Throttle plot updates to ~150ms.
+   - Keep clickable legend behavior to toggle run visibility.
 
-Acceptance criteria
+Testing requirements
+--------------------
+- Add `pytest` tests in `tests/test_cliffwalking_logic.py` for:
+  - environment step/reward/termination behavior,
+  - slippery toggle effect (deterministic test using seeded RNG or controlled randomness),
+  - `Trainer.run_episode` execution for both `DQNetwork` and `DDQNetwork`,
+  - one learning update path for DQN and DDQN (lightweight, fast).
+
+Dependencies (`requirements.txt`)
+---------------------------------
+Include at least:
+- gymnasium
+- pygame
+- matplotlib
+- pillow
+- numpy
+- torch
+- pytest
+
+Execution steps (must run)
+--------------------------
+1. Install dependencies.
+2. Run unit tests and fix issues until they pass.
+3. Launch the app to verify GUI starts and animation panel updates.
+
+Completion criteria
 -------------------
-- Only two policy options: vanilla DQN and double DQN.
-- GUI includes `slippery cliff` toggle and `Clear plots` button.
-- `DNN Parameters` panel exists between `Controls` and `Training Parameters`.
-- Live plot includes moving average with doubled linewidth.
-- Training runs asynchronously and updates state/plot during execution.
-- Tests pass.
+- Code compiles and tests pass.
+- GUI launches, shows environment animation, and exposes all required controls/parameters.
+- Training works for both DQN and DDQN and updates live plots (including moving average).
+- CSV/PNG export works.
 
-Output format expected from assistant after implementation
----------------------------------------------------------
-- Short summary of created/updated files.
-- Test command and result.
-- Any assumptions/default hyperparameters chosen.
+Final output format from assistant
+----------------------------------
+After implementation, provide:
+- brief change summary by file,
+- test command and result,
+- run command for the GUI.

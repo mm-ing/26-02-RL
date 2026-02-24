@@ -4,10 +4,11 @@ Set up a cliff walking reinforcement learning project based on the gymnasium API
 
 High-level summary
 ------------------
+- project-name: `CliffWalking`
 - 2 policies/approaches: 
     - vanilla deep Q-learning (DQN)
     - double DQN
-- expanded GUI by additional DNN panel
+- expand GUI by additional DNN panel
 
 Functional requirements (detailed)
 ----------------------------------
@@ -22,15 +23,10 @@ Environment & logic:
         - class `DDQNetwork`
         - suggest and implement default settings
 
-- expand the `Trainer` class for training both policies
-
 GUI behavior and layout:
 - in the evironment panel:
-    - show the map and the player moving towards the target, animate the player during training
+    - show the gymnasium animation of cliff walking
     - add toggle "slippery cliff"
-- in the control panel:
-    - remove the button for single step
-    - add button "Clear plots" to clear the live plot window 
 - between panels `Controls` and `Training Parameters` add a `DNN Parameters` panel with tight width, same height as `Training Parameters` 
 - add relevant input fields for `Training Parameters` and `DNN Parameters`
 - in the live plot add a moving average plot of the reward with doubled line width

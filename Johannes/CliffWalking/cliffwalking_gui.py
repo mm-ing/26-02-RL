@@ -2,383 +2,435 @@ from __future__ import annotations
 
 import threading
 import time
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
-
-import tkinter as tk
-from tkinter import ttk
+from tkinter import BooleanVar, DoubleVar, IntVar, StringVar, Tk, messagebox, ttk
 
 import numpy as np
-from PIL import Image, ImageTk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+from PIL import Image, ImageTk
 
-from cliffwalking_logic import CliffWalkingEnv, DDQNetwork, DQNetwork, Trainer
+from cliffwalking_logic import DDQNetwork, DQNetwork, GridWorld, Trainer, ensure_output_dirs
 
 
-class CliffWalkingGUI(tk.Tk):
-    def __init__(self) -> None:
-        super().__init__()
-        self.title("CliffWalking RL")
-        self.geometry("1250x880")
+class CliffWalkingGUI:
+    def __init__(self, root: Tk) -> None:
+        self.root = root
+        self.root.title("CliffWalking RL - DQN / DDQN")
 
         self.base_dir = Path(__file__).resolve().parent
-        self.plots_dir = self.base_dir / "plots"
-        self.plots_dir.mkdir(parents=True, exist_ok=True)
+        self.results_dir, self.plots_dir = ensure_output_dirs(self.base_dir)
 
-        self.env = CliffWalkingEnv(slippery=False)
-        self.trainer = Trainer(self.env, output_dir=self.base_dir)
+        self.env = GridWorld(slippery=False, render_mode="rgb_array")
+        self.trainer = Trainer(self.env, base_dir=self.base_dir)
 
-        self.current_policy_obj = None
-        self.training_thread: Optional[threading.Thread] = None
-        self._stop_requested = False
-        self._last_plot_update = 0.0
-        self.plot_runs: List[Dict] = []
-        self._legend_map: Dict = {}
-        self._env_image_tk = None
-
-        self.current_step = 0
         self.current_episode = 0
+        self.current_step = 0
+        self._stop_requested = False
+        self._training_thread: threading.Thread | None = None
+        self._last_plot_update = 0.0
 
-        self._build_vars()
+        self.plot_runs: list[dict] = []
+        self._legend_pick_map: dict = {}
+        self._frame_photo: ImageTk.PhotoImage | None = None
+
+        self._init_vars()
         self._build_layout()
-        self.env.reset()
-        self._refresh_environment_view()
-        self._set_current_counters(0, 0, training=False)
-        self.protocol("WM_DELETE_WINDOW", self._on_window_close)
+        self._set_current_counters(episode=0, step=0, training=False)
+        self._update_env_frame()
 
-    def _build_vars(self) -> None:
-        self.max_steps_var = tk.IntVar(value=200)
-        self.episodes_var = tk.IntVar(value=300)
-        self.policy_var = tk.StringVar(value="Vanilla DQN")
-        self.epsilon_start_var = tk.DoubleVar(value=1.0)
-        self.epsilon_end_var = tk.DoubleVar(value=0.05)
-        self.epsilon_decay_var = tk.DoubleVar(value=0.995)
-        self.learning_rate_var = tk.DoubleVar(value=1e-3)
-        self.gamma_var = tk.DoubleVar(value=0.99)
-        self.live_plot_var = tk.BooleanVar(value=True)
-        self.reduced_speed_var = tk.BooleanVar(value=True)
+    def _init_vars(self) -> None:
+        self.max_steps_var = IntVar(value=200)
+        self.episodes_var = IntVar(value=200)
+        self.policy_var = StringVar(value="DQN")
+        self.live_plot_var = BooleanVar(value=True)
+        self.reduced_speed_var = BooleanVar(value=True)
+        self.fast_mode_var = BooleanVar(value=False)
 
-        self.replay_buffer_var = tk.IntVar(value=5000)
-        self.batch_size_var = tk.IntVar(value=64)
-        self.activation_var = tk.StringVar(value="relu")
-        self.neurons_var = tk.IntVar(value=64)
-        self.target_update_var = tk.IntVar(value=200)
-        self.slippery_var = tk.BooleanVar(value=False)
+        self.lr_var = DoubleVar(value=1e-3)
+        self.gamma_var = DoubleVar(value=0.99)
+        self.eps_start_var = DoubleVar(value=1.0)
+        self.eps_end_var = DoubleVar(value=0.05)
+        self.eps_decay_var = DoubleVar(value=0.995)
+        self.slippery_var = BooleanVar(value=False)
+
+        self.replay_size_var = IntVar(value=10_000)
+        self.batch_size_var = IntVar(value=64)
+        self.hidden_neurons_var = IntVar(value=128)
+        self.target_update_var = IntVar(value=50)
+        self.activation_var = StringVar(value="relu")
 
     def _build_layout(self) -> None:
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=0)
-        self.grid_columnconfigure(2, weight=0)
-        self.grid_rowconfigure(0, weight=0)
-        self.grid_rowconfigure(1, weight=0)
-        self.grid_rowconfigure(2, weight=0)
-        self.grid_rowconfigure(3, weight=1)
+        self.root.columnconfigure(0, weight=1)
+        self.root.columnconfigure(1, weight=0)
+        self.root.columnconfigure(2, weight=0)
+        self.root.rowconfigure(0, weight=1)
+        self.root.rowconfigure(3, weight=1)
 
-        self.env_frame = ttk.LabelFrame(self, text="Environment")
-        self.env_frame.grid(row=0, column=0, columnspan=3, sticky="nsew", padx=8, pady=8)
-        self.env_canvas = tk.Canvas(self.env_frame, width=1000, height=330, bg="black", highlightthickness=0)
-        self.env_canvas.pack(fill="both", expand=True, padx=6, pady=6)
-        env_controls = ttk.Frame(self.env_frame)
-        env_controls.pack(fill="x", padx=6, pady=(0, 6))
-        ttk.Checkbutton(env_controls, text="Slippery cliff", variable=self.slippery_var, command=self._on_slippery_toggle).pack(side="left")
+        self.env_frame = ttk.LabelFrame(self.root, text="Environment")
+        self.env_frame.grid(row=0, column=0, columnspan=3, sticky="nsew", padx=6, pady=6)
+        self.env_frame.columnconfigure(0, weight=1)
 
-        self.controls_frame = ttk.LabelFrame(self, text="Controls")
-        self.controls_frame.grid(row=1, column=0, sticky="nsew", padx=8, pady=4)
-        self.controls_frame.grid_columnconfigure(0, weight=1)
-        self.controls_frame.grid_columnconfigure(1, weight=1)
+        toggle_frame = ttk.Frame(self.env_frame)
+        toggle_frame.grid(row=0, column=0, sticky="ew", padx=6, pady=(4, 2))
+        ttk.Checkbutton(toggle_frame, text="slippery cliff", variable=self.slippery_var, command=self._on_slippery_changed).pack(side="left")
 
-        ttk.Button(self.controls_frame, text="Run single episode", command=self._on_run_episode).grid(row=0, column=0, sticky="ew", padx=4, pady=4)
-        ttk.Button(self.controls_frame, text="Reset All", command=self._on_reset_all).grid(row=0, column=1, sticky="ew", padx=4, pady=4)
-        ttk.Button(self.controls_frame, text="Train and Run", command=self._on_train).grid(row=1, column=0, sticky="ew", padx=4, pady=4)
-        ttk.Button(self.controls_frame, text="Save samplings CSV", command=self._on_save_samplings_csv).grid(row=1, column=1, sticky="ew", padx=4, pady=4)
-        ttk.Button(self.controls_frame, text="Save Plot PNG", command=self._on_save_plot_png).grid(row=2, column=0, sticky="ew", padx=4, pady=4)
-        ttk.Button(self.controls_frame, text="Clear plots", command=self._on_clear_plots).grid(row=2, column=1, sticky="ew", padx=4, pady=4)
+        self.env_image_label = ttk.Label(self.env_frame)
+        self.env_image_label.grid(row=1, column=0, sticky="nsew", padx=6, pady=6)
 
-        self.state_frame = ttk.LabelFrame(self, text="Current State")
-        self.state_frame.grid(row=2, column=0, sticky="nsew", padx=8, pady=4)
-        self.state_label = ttk.Label(self.state_frame, text="")
-        self.state_label.pack(fill="x", padx=6, pady=8)
+        self.controls_frame = ttk.LabelFrame(self.root, text="Controls")
+        self.controls_frame.grid(row=1, column=0, sticky="new", padx=6, pady=6)
+        for col in range(2):
+            self.controls_frame.columnconfigure(col, weight=1)
 
-        self.dnn_frame = ttk.LabelFrame(self, text="DNN Parameters")
-        self.dnn_frame.grid(row=1, column=1, rowspan=2, sticky="ns", padx=4, pady=4)
-        ttk.Label(self.dnn_frame, text="Replay buffer").grid(row=0, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(self.dnn_frame, width=10, textvariable=self.replay_buffer_var).grid(row=0, column=1, sticky="w", padx=6)
-        ttk.Label(self.dnn_frame, text="Batch size").grid(row=1, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(self.dnn_frame, width=10, textvariable=self.batch_size_var).grid(row=1, column=1, sticky="w", padx=6)
-        ttk.Label(self.dnn_frame, text="Activation").grid(row=2, column=0, sticky="w", padx=6, pady=5)
-        ttk.Combobox(self.dnn_frame, width=9, state="readonly", values=["relu", "tanh", "sigmoid", "elu"], textvariable=self.activation_var).grid(row=2, column=1, sticky="w", padx=6)
-        ttk.Label(self.dnn_frame, text="Neurons").grid(row=3, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(self.dnn_frame, width=10, textvariable=self.neurons_var).grid(row=3, column=1, sticky="w", padx=6)
-        ttk.Label(self.dnn_frame, text="Target sync").grid(row=4, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(self.dnn_frame, width=10, textvariable=self.target_update_var).grid(row=4, column=1, sticky="w", padx=6)
+        ttk.Button(self.controls_frame, text="Run single episode", command=self.run_single_episode).grid(row=0, column=0, sticky="ew", padx=3, pady=3)
+        ttk.Button(self.controls_frame, text="Reset All", command=self.reset_all).grid(row=0, column=1, sticky="ew", padx=3, pady=3)
+        ttk.Button(self.controls_frame, text="Train and Run", command=self.train_and_run).grid(row=1, column=0, sticky="ew", padx=3, pady=3)
+        ttk.Button(self.controls_frame, text="Save samplings CSV", command=self.save_samplings_csv).grid(row=1, column=1, sticky="ew", padx=3, pady=3)
+        ttk.Button(self.controls_frame, text="Save Plot PNG", command=self.save_plot_png).grid(row=2, column=0, sticky="ew", padx=3, pady=3)
+        ttk.Button(self.controls_frame, text="Clear Plot", command=self.clear_plot).grid(row=2, column=1, sticky="ew", padx=3, pady=3)
 
-        self.params_frame = ttk.LabelFrame(self, text="Training Parameters")
-        self.params_frame.grid(row=1, column=2, rowspan=2, sticky="ns", padx=8, pady=4)
-        ttk.Label(self.params_frame, text="Max steps").grid(row=0, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(self.params_frame, width=10, textvariable=self.max_steps_var).grid(row=0, column=1, sticky="w", padx=6)
-        ttk.Label(self.params_frame, text="Episodes").grid(row=1, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(self.params_frame, width=10, textvariable=self.episodes_var).grid(row=1, column=1, sticky="w", padx=6)
-        ttk.Label(self.params_frame, text="Policy").grid(row=2, column=0, sticky="w", padx=6, pady=5)
-        ttk.Combobox(self.params_frame, width=12, state="readonly", values=["Vanilla DQN", "Double DQN"], textvariable=self.policy_var).grid(row=2, column=1, sticky="w", padx=6)
-        ttk.Label(self.params_frame, text="Eps start").grid(row=3, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(self.params_frame, width=10, textvariable=self.epsilon_start_var).grid(row=3, column=1, sticky="w", padx=6)
-        ttk.Label(self.params_frame, text="Eps end").grid(row=4, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(self.params_frame, width=10, textvariable=self.epsilon_end_var).grid(row=4, column=1, sticky="w", padx=6)
-        ttk.Label(self.params_frame, text="Eps decay").grid(row=5, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(self.params_frame, width=10, textvariable=self.epsilon_decay_var).grid(row=5, column=1, sticky="w", padx=6)
-        ttk.Label(self.params_frame, text="Learn rate").grid(row=6, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(self.params_frame, width=10, textvariable=self.learning_rate_var).grid(row=6, column=1, sticky="w", padx=6)
-        ttk.Label(self.params_frame, text="Gamma").grid(row=7, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(self.params_frame, width=10, textvariable=self.gamma_var).grid(row=7, column=1, sticky="w", padx=6)
+        self.current_state_frame = ttk.LabelFrame(self.root, text="Current State")
+        self.current_state_frame.grid(row=2, column=0, sticky="new", padx=6, pady=6)
+        self.current_state_label = ttk.Label(self.current_state_frame, text="")
+        self.current_state_label.grid(row=0, column=0, sticky="w", padx=6, pady=6)
 
-        live_row = ttk.Frame(self.params_frame)
-        live_row.grid(row=8, column=0, columnspan=2, sticky="w", padx=6, pady=6)
-        ttk.Checkbutton(live_row, text="Live plot", variable=self.live_plot_var).pack(side="left", padx=(0, 8))
-        ttk.Checkbutton(live_row, text="reduced speed", variable=self.reduced_speed_var).pack(side="left")
+        self.dnn_frame = ttk.LabelFrame(self.root, text="DNN Parameters")
+        self.dnn_frame.grid(row=1, column=1, rowspan=2, sticky="ns", padx=6, pady=6)
+        self._build_dnn_param_inputs(self.dnn_frame)
 
-        self.plot_frame = ttk.LabelFrame(self, text="Live Plot")
-        self.plot_frame.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=8, pady=8)
+        self.training_frame = ttk.LabelFrame(self.root, text="Training Parameters")
+        self.training_frame.grid(row=1, column=2, rowspan=2, sticky="ns", padx=6, pady=6)
+        self._build_training_param_inputs(self.training_frame)
+
+        self.plot_frame = ttk.LabelFrame(self.root, text="Live Plot")
+        self.plot_frame.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=6, pady=6)
         self.plot_frame.rowconfigure(0, weight=1)
         self.plot_frame.columnconfigure(0, weight=1)
-        self.figure = Figure(figsize=(10, 3), dpi=100)
+
+        self.figure = Figure(figsize=(9, 3), dpi=100)
         self.ax = self.figure.add_subplot(111)
+        self.ax.set_title("Episode Rewards")
         self.ax.set_xlabel("Episode")
         self.ax.set_ylabel("Reward")
-        self.canvas_plot = FigureCanvasTkAgg(self.figure, master=self.plot_frame)
-        self.canvas_plot.get_tk_widget().grid(row=0, column=0, sticky="nsew")
-        self.canvas_plot.mpl_connect("pick_event", self._on_legend_pick)
+        self.canvas = FigureCanvasTkAgg(self.figure, master=self.plot_frame)
+        self.canvas_widget = self.canvas.get_tk_widget()
+        self.canvas_widget.grid(row=0, column=0, sticky="nsew")
+        self.canvas.mpl_connect("pick_event", self._on_legend_pick)
 
-    def _on_window_close(self) -> None:
-        self._stop_requested = True
-        self.env.close()
-        self.destroy()
+    def _build_training_param_inputs(self, parent: ttk.LabelFrame) -> None:
+        entries = [
+            ("Max steps", self.max_steps_var),
+            ("Episodes", self.episodes_var),
+            ("Learning rate", self.lr_var),
+            ("Gamma", self.gamma_var),
+            ("Epsilon start", self.eps_start_var),
+            ("Epsilon end", self.eps_end_var),
+            ("Epsilon decay", self.eps_decay_var),
+        ]
+        for row, (label, var) in enumerate(entries):
+            ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=5, pady=2)
+            ttk.Entry(parent, textvariable=var, width=12).grid(row=row, column=1, sticky="ew", padx=5, pady=2)
 
-    def _on_slippery_toggle(self) -> None:
-        self.env.set_slippery(self.slippery_var.get())
+        row = len(entries)
+        ttk.Label(parent, text="Policy").grid(row=row, column=0, sticky="w", padx=5, pady=2)
+        ttk.Combobox(parent, textvariable=self.policy_var, values=["DQN", "DDQN"], state="readonly", width=10).grid(row=row, column=1, sticky="ew", padx=5, pady=2)
+        row += 1
 
-    def _format_state_text(self, training: bool, step: int, episode: int) -> str:
-        state = "Training" if training else "Idle"
-        return f"{state:>8}: step:{step:>4d}  episode:{episode:>4d}"
+        ttk.Checkbutton(parent, text="Live plot", variable=self.live_plot_var).grid(row=row, column=0, sticky="w", padx=5, pady=2)
+        ttk.Checkbutton(parent, text="reduced speed", variable=self.reduced_speed_var).grid(row=row, column=1, sticky="w", padx=5, pady=2)
+        row += 1
+        ttk.Checkbutton(parent, text="Fast training mode", variable=self.fast_mode_var).grid(row=row, column=0, columnspan=2, sticky="w", padx=5, pady=2)
 
-    def _set_current_counters(self, episode: int, step: int, training: bool) -> None:
+    def _build_dnn_param_inputs(self, parent: ttk.LabelFrame) -> None:
+        entries = [
+            ("Replay buffer", self.replay_size_var),
+            ("Batch size", self.batch_size_var),
+            ("Hidden neurons", self.hidden_neurons_var),
+            ("Target update", self.target_update_var),
+        ]
+        for row, (label, var) in enumerate(entries):
+            ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=5, pady=2)
+            ttk.Entry(parent, textvariable=var, width=12).grid(row=row, column=1, sticky="ew", padx=5, pady=2)
+
+        row = len(entries)
+        ttk.Label(parent, text="Activation").grid(row=row, column=0, sticky="w", padx=5, pady=2)
+        ttk.Combobox(
+            parent,
+            textvariable=self.activation_var,
+            values=["relu", "tanh", "elu", "leaky_relu", "sigmoid"],
+            state="readonly",
+            width=10,
+        ).grid(row=row, column=1, sticky="ew", padx=5, pady=2)
+
+    def _set_current_counters(self, episode: int, step: int, training: bool = False) -> None:
+        status = "Training" if training else "Idle"
+        status_padded = status.rjust(len("Training"))
         self.current_episode = int(episode)
         self.current_step = int(step)
-        self.state_label.configure(text=self._format_state_text(training, step=self.current_step, episode=self.current_episode))
+        text = f"{status_padded}: step: {self.current_step:4d}  episode: {self.current_episode:4d}"
+        self.current_state_label.configure(text=text)
 
-    def _build_policy(self):
-        common_kwargs = {
-            "learning_rate": float(self.learning_rate_var.get()),
-            "gamma": float(self.gamma_var.get()),
-            "epsilon": float(self.epsilon_start_var.get()),
-            "neurons": int(self.neurons_var.get()),
+    def _on_slippery_changed(self) -> None:
+        self.env.set_slippery(self.slippery_var.get())
+
+    def _policy_from_inputs(self):
+        kwargs = {
+            "n_states": self.env.n_states,
+            "n_actions": self.env.n_actions,
+            "learning_rate": self.lr_var.get(),
+            "gamma": self.gamma_var.get(),
+            "epsilon_start": self.eps_start_var.get(),
+            "epsilon_end": self.eps_end_var.get(),
+            "epsilon_decay": self.eps_decay_var.get(),
+            "replay_buffer_size": self.replay_size_var.get(),
+            "batch_size": self.batch_size_var.get(),
+            "target_update_frequency": self.target_update_var.get(),
+            "hidden_neurons": self.hidden_neurons_var.get(),
             "activation": self.activation_var.get(),
-            "batch_size": int(self.batch_size_var.get()),
-            "replay_buffer_size": int(self.replay_buffer_var.get()),
-            "target_update_interval": int(self.target_update_var.get()),
         }
-        if self.policy_var.get() == "Double DQN":
-            return DDQNetwork(**common_kwargs)
-        return DQNetwork(**common_kwargs)
+        if self.policy_var.get() == "DDQN":
+            return DDQNetwork(**kwargs)
+        return DQNetwork(**kwargs)
 
-    def _refresh_environment_view(self) -> None:
+    def _policy_from_inputs_fast(self):
+        kwargs = {
+            "n_states": self.env.n_states,
+            "n_actions": self.env.n_actions,
+            "learning_rate": self.lr_var.get(),
+            "gamma": self.gamma_var.get(),
+            "epsilon_start": self.eps_start_var.get(),
+            "epsilon_end": self.eps_end_var.get(),
+            "epsilon_decay": self.eps_decay_var.get(),
+            "replay_buffer_size": self.replay_size_var.get(),
+            "batch_size": self.batch_size_var.get(),
+            "target_update_frequency": self.target_update_var.get(),
+            "hidden_neurons": self.hidden_neurons_var.get(),
+            "activation": self.activation_var.get(),
+            "device": "cpu",
+        }
+        if self.policy_var.get() == "DDQN":
+            return DDQNetwork(**kwargs)
+        return DQNetwork(**kwargs)
+
+    def _update_env_frame(self) -> None:
         frame = self.env.render_frame()
-        image = Image.fromarray(frame)
-        image = image.resize((1000, 300), resample=Image.NEAREST)
-        self._env_image_tk = ImageTk.PhotoImage(image)
-        self.env_canvas.delete("all")
-        self.env_canvas.create_image(0, 0, anchor="nw", image=self._env_image_tk)
-
-    def _moving_average(self, values: List[float], window: int = 10) -> List[float]:
-        if not values:
-            return []
-        out: List[float] = []
-        for index in range(len(values)):
-            start = max(0, index - window + 1)
-            segment = values[start : index + 1]
-            out.append(sum(segment) / len(segment))
-        return out
-
-    def _update_plot(self, current_rewards: Optional[List[float]] = None) -> None:
-        now = time.time()
-        if now - self._last_plot_update < 0.15:
+        if frame is None:
             return
-        self._last_plot_update = now
+        arr = np.asarray(frame, dtype=np.uint8)
+        image = Image.fromarray(arr).resize((660, 220))
+        self._frame_photo = ImageTk.PhotoImage(image=image)
+        self.env_image_label.configure(image=self._frame_photo)
 
+    def _moving_average(self, rewards: list[float], window: int = 10) -> np.ndarray:
+        values = np.asarray(rewards, dtype=float)
+        if values.size == 0:
+            return np.array([])
+
+        effective_window = max(1, min(int(window), values.size))
+        if effective_window == 1:
+            return values.copy()
+
+        cumsum = np.cumsum(np.insert(values, 0, 0.0))
+        moving_valid = (cumsum[effective_window:] - cumsum[:-effective_window]) / effective_window
+        prefix = np.array([values[:i].mean() for i in range(1, effective_window)], dtype=float)
+        return np.concatenate([prefix, moving_valid])
+
+    def _redraw_all_plots(self) -> None:
         self.ax.clear()
+        self.ax.set_title("Episode Rewards")
         self.ax.set_xlabel("Episode")
         self.ax.set_ylabel("Reward")
 
         handles = []
         labels = []
-        for run in self.plot_runs:
+        self._legend_pick_map = {}
+
+        for idx, run in enumerate(self.plot_runs):
             if not run.get("visible", True):
                 continue
+
             rewards = run["rewards"]
-            line, = self.ax.plot(rewards, linewidth=1.5)
-            moving_avg, = self.ax.plot(self._moving_average(rewards, window=10), linewidth=3.0)
-            handles.extend([line, moving_avg])
-            labels.extend([run["label"], f"{run['label']} MA"])
+            x_axis = np.arange(1, len(rewards) + 1)
+            base_width = 1.25
+            ma_width = base_width * 2.0
 
-        if current_rewards:
-            line, = self.ax.plot(current_rewards, linewidth=1.5)
-            moving_avg, = self.ax.plot(self._moving_average(current_rewards, window=10), linewidth=3.0)
-            handles.extend([line, moving_avg])
-            labels.extend(["Current", "Current MA"])
+            (line_rewards,) = self.ax.plot(
+                x_axis,
+                rewards,
+                linewidth=base_width,
+                alpha=0.75,
+                label=run["label"],
+                zorder=2,
+            )
+            ma = self._moving_average(rewards, window=10)
+            (line_ma,) = self.ax.plot(
+                x_axis,
+                ma,
+                linewidth=ma_width,
+                linestyle="--",
+                alpha=0.95,
+                color=line_rewards.get_color(),
+                label=f"{run['label']} (MA)",
+                zorder=3,
+            )
+            handles.extend([line_rewards, line_ma])
+            labels.extend([run["label"], f"{run['label']} (MA)"])
+            self._legend_pick_map[line_rewards.get_label()] = idx
+            self._legend_pick_map[line_ma.get_label()] = idx
 
-        self._legend_map = {}
         if handles:
-            legend = self.ax.legend(handles, labels, loc="best")
-            for leg_line, label in zip(legend.get_lines(), labels):
-                leg_line.set_picker(True)
-                self._legend_map[leg_line] = label
-
-        self.figure.tight_layout()
-        self.canvas_plot.draw_idle()
-
-    def _redraw_all_plots(self) -> None:
-        self._last_plot_update = 0.0
-        self._update_plot()
+            legend = self.ax.legend(handles=handles, labels=labels, loc="best")
+            for line in legend.get_lines():
+                line.set_picker(True)
+        self.canvas.draw_idle()
 
     def _on_legend_pick(self, event) -> None:
-        label = self._legend_map.get(event.artist)
-        if not label:
+        label = event.artist.get_label()
+        idx = self._legend_pick_map.get(label)
+        if idx is None:
             return
-        base_label = label.replace(" MA", "")
-        for run in self.plot_runs:
-            if run["label"] == base_label:
-                run["visible"] = not run.get("visible", True)
-                break
+        self.plot_runs[idx]["visible"] = not self.plot_runs[idx].get("visible", True)
         self._redraw_all_plots()
 
-    def _epsilon_for_episode(self, episode: int) -> float:
-        eps_start = float(self.epsilon_start_var.get())
-        eps_end = float(self.epsilon_end_var.get())
-        eps_decay = float(self.epsilon_decay_var.get())
-        return max(eps_end, eps_start * (eps_decay ** max(0, episode - 1)))
+    def _throttled_plot_update(self, current_rewards: list[float], run_label: str) -> None:
+        now = time.time()
+        if now - self._last_plot_update < 0.15:
+            return
+        self._last_plot_update = now
 
-    def _animate_transitions(self, transitions, on_done=None) -> None:
-        self.env.reset()
-        self._refresh_environment_view()
+        if self.plot_runs and self.plot_runs[-1].get("is_current", False):
+            self.plot_runs[-1]["rewards"] = current_rewards
+        else:
+            self.plot_runs.append({"label": run_label, "rewards": current_rewards, "visible": True, "is_current": True})
+        self._redraw_all_plots()
 
-        def step_fn(index: int) -> None:
-            if index >= len(transitions):
-                if on_done is not None:
-                    on_done()
-                return
-            row = int(round(float(transitions[index].next_state[0]) * (self.env.rows - 1)))
-            col = int(round(float(transitions[index].next_state[1]) * (self.env.cols - 1)))
-            self.env.current_state = self.env.encode_state(row, col)
-            self._refresh_environment_view()
-            self.after(45, lambda: step_fn(index + 1))
+    def run_single_episode(self) -> None:
+        if self._training_thread and self._training_thread.is_alive():
+            return
 
-        step_fn(0)
-
-    def _on_run_episode(self) -> None:
+        policy = self._policy_from_inputs()
         self._stop_requested = False
-        self.env.set_slippery(self.slippery_var.get())
-        policy = self._build_policy()
-        self._set_current_counters(1, 0, training=False)
+        self._set_current_counters(episode=1, step=0, training=True)
 
-        total_reward, transitions = self.trainer.run_episode(
+        def progress(step: int) -> None:
+            self.root.after(0, lambda s=step: self._set_current_counters(1, s, training=True))
+
+        def transition_cb(_transition, _step):
+            self.root.after(0, self._update_env_frame)
+
+        result = self.trainer.run_episode(
             policy=policy,
-            epsilon=float(self.epsilon_start_var.get()),
-            max_steps=int(self.max_steps_var.get()),
-            progress_callback=None,
+            epsilon=self.eps_start_var.get(),
+            max_steps=self.max_steps_var.get(),
+            progress_callback=progress,
+            transition_callback=transition_cb,
         )
-
-        self._animate_transitions(
-            transitions,
-            on_done=lambda: self._set_current_counters(1, len(transitions), training=False),
-        )
-
-        label = f"Episode {datetime.now().strftime('%H:%M:%S')}"
-        self.plot_runs.append({"label": label, "rewards": [total_reward], "visible": True})
+        self.plot_runs.append({"label": f"Single-{self.policy_var.get()}", "rewards": [result["total_reward"]], "visible": True})
         self._redraw_all_plots()
+        self._set_current_counters(episode=1, step=result["steps"], training=False)
 
-    def _on_train(self) -> None:
-        if self.training_thread and self.training_thread.is_alive():
+    def train_and_run(self) -> None:
+        if self._training_thread and self._training_thread.is_alive():
             return
+
+        fast_mode = self.fast_mode_var.get()
+        policy = self._policy_from_inputs_fast() if fast_mode else self._policy_from_inputs()
         self._stop_requested = False
-        self.env.set_slippery(self.slippery_var.get())
-        self.current_policy_obj = self._build_policy()
-        self.training_thread = threading.Thread(target=self._train_worker, daemon=True)
-        self.training_thread.start()
+        episodes = max(1, self.episodes_var.get())
+        max_steps = max(1, self.max_steps_var.get())
+        eps_start = self.eps_start_var.get()
 
-    def _train_worker(self) -> None:
-        episodes = int(self.episodes_var.get())
-        max_steps = int(self.max_steps_var.get())
-        rewards: List[float] = []
-        reduced = bool(self.reduced_speed_var.get())
+        progress_update_every = 10 if fast_mode else 1
+        plot_update_every = 5 if fast_mode else 1
+        render_transitions = not fast_mode
 
-        for episode in range(1, episodes + 1):
-            if self._stop_requested:
-                break
+        def worker() -> None:
+            rewards: list[float] = []
+            run_label = f"{self.policy_var.get()}-{int(time.time())}"
 
-            def progress(step_no: int, ep=episode) -> None:
-                self.after(0, lambda: self._set_current_counters(ep, step_no, training=True))
-                self.after(0, self._refresh_environment_view)
+            for episode in range(1, episodes + 1):
+                if self._stop_requested:
+                    break
 
-            reward, _ = self.trainer.run_episode(
-                policy=self.current_policy_obj,
-                epsilon=self._epsilon_for_episode(episode),
-                max_steps=max_steps,
-                progress_callback=progress,
-            )
-            rewards.append(reward)
+                self.root.after(0, lambda ep=episode: self._set_current_counters(ep, 0, training=True))
 
-            if self.live_plot_var.get():
-                self.after(0, lambda rewards_copy=rewards.copy(): self._update_plot(current_rewards=rewards_copy))
+                def progress(step: int, ep=episode):
+                    if step % progress_update_every == 0:
+                        self.root.after(0, lambda: self._set_current_counters(ep, step, training=True))
 
-            if reduced:
-                time.sleep(0.033)
+                def transition_cb(_transition, _step):
+                    if render_transitions:
+                        self.root.after(0, self._update_env_frame)
 
-        if rewards:
-            label = f"Run {datetime.now().strftime('%H:%M:%S')}"
-            self.plot_runs.append({"label": label, "rewards": rewards, "visible": True})
+                result = self.trainer.run_episode(
+                    policy=policy,
+                    epsilon=eps_start,
+                    max_steps=max_steps,
+                    progress_callback=progress,
+                    transition_callback=transition_cb if render_transitions else None,
+                )
+                rewards.append(result["total_reward"])
 
-        self.after(0, lambda: self._set_current_counters(self.current_episode, self.current_step, training=False))
-        self.after(0, self._redraw_all_plots)
+                if self.live_plot_var.get() and (episode % plot_update_every == 0 or episode == episodes):
+                    self.root.after(0, lambda vals=rewards.copy(), lbl=run_label: self._throttled_plot_update(vals, lbl))
 
-    def _on_reset_all(self) -> None:
-        self._stop_requested = True
-        self.env.reset()
-        self._refresh_environment_view()
-        self.plot_runs.clear()
-        self._legend_map.clear()
+                if self.reduced_speed_var.get():
+                    time.sleep(0.033)
+
+            if rewards:
+                self.root.after(0, lambda: self._finalize_run(run_label, rewards))
+            self.root.after(0, lambda: self._set_current_counters(self.current_episode, self.current_step, training=False))
+
+        self._training_thread = threading.Thread(target=worker, daemon=True)
+        self._training_thread.start()
+
+    def _finalize_run(self, run_label: str, rewards: list[float]) -> None:
+        if self.plot_runs and self.plot_runs[-1].get("is_current", False):
+            self.plot_runs[-1] = {"label": run_label, "rewards": rewards, "visible": True}
+        else:
+            self.plot_runs.append({"label": run_label, "rewards": rewards, "visible": True})
         self._redraw_all_plots()
-        self.current_policy_obj = None
+
+    def save_samplings_csv(self) -> None:
+        if self._training_thread and self._training_thread.is_alive():
+            messagebox.showinfo("Busy", "Training is currently running.")
+            return
+
+        policy = self._policy_from_inputs()
+        rewards, csv_path = self.trainer.train(
+            policy=policy,
+            num_episodes=max(1, self.episodes_var.get()),
+            max_steps=max(1, self.max_steps_var.get()),
+            epsilon=self.eps_start_var.get(),
+            save_csv=f"cliffwalking_{self.policy_var.get().lower()}",
+        )
+        if rewards:
+            self.plot_runs.append({"label": f"CSV-{self.policy_var.get()}", "rewards": rewards, "visible": True})
+            self._redraw_all_plots()
+        messagebox.showinfo("Saved", f"CSV saved to:\n{csv_path}")
+
+    def save_plot_png(self) -> None:
+        timestamp = int(time.time())
+        filename = (
+            f"cliffwalking_{self.policy_var.get().lower()}_eps{self.eps_start_var.get():.2f}-{self.eps_end_var.get():.2f}"
+            f"_lr{self.lr_var.get()}_g{self.gamma_var.get()}_ep{self.episodes_var.get()}_steps{self.max_steps_var.get()}_{timestamp}.png"
+        )
+        output_path = self.plots_dir / filename
+        self.figure.savefig(output_path, dpi=150, bbox_inches="tight")
+        messagebox.showinfo("Saved", f"Plot saved to:\n{output_path}")
+
+    def clear_plot(self) -> None:
+        self.plot_runs.clear()
+        self._redraw_all_plots()
+
+    def reset_all(self) -> None:
+        self._stop_requested = True
+        self.clear_plot()
+        self.env.reset()
+        self._update_env_frame()
         self._set_current_counters(0, 0, training=False)
 
-    def _on_save_samplings_csv(self) -> None:
-        self.env.set_slippery(self.slippery_var.get())
-        policy = self._build_policy()
-        base = f"cliff_samplings_{self.policy_var.get().lower().replace(' ', '_')}"
-        self.trainer.train(
-            policy=policy,
-            num_episodes=int(self.episodes_var.get()),
-            max_steps=int(self.max_steps_var.get()),
-            epsilon=float(self.epsilon_start_var.get()),
-            save_csv=base,
-        )
-
-    def _on_save_plot_png(self) -> None:
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = (
-            f"plot_{self.policy_var.get().lower().replace(' ', '_')}_"
-            f"epsmin{self.epsilon_end_var.get():.2f}_epsmax{self.epsilon_start_var.get():.2f}_"
-            f"alpha{self.learning_rate_var.get():.4f}_gamma{self.gamma_var.get():.2f}_"
-            f"episodes{self.episodes_var.get()}_maxsteps{self.max_steps_var.get()}_{stamp}.png"
-        )
-        self.figure.savefig(self.plots_dir / filename)
-
-    def _on_clear_plots(self) -> None:
-        self.plot_runs.clear()
-        self._legend_map.clear()
-        self._redraw_all_plots()
-
-
-def run_gui() -> None:
-    app = CliffWalkingGUI()
-    app.mainloop()
+    def shutdown(self) -> None:
+        self._stop_requested = True
+        self.env.close()

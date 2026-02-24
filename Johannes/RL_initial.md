@@ -4,11 +4,12 @@ Set up a general reinforcement learning project including the project structure,
 
 High-level summary
 ------------------
-- Use object oriented programming.
+- Use `object oriented programming`.
+- Use `Pytorch` with GPU optimization for any deep learning approaches
 - Environment in which an agent is trained.
 - One or several agents using different learning polycies.
 - Trainer that can run single episodes, train for multiple episodes, optionally save sampled transitions to CSV, and support per-step progress callbacks.
-- A Tkinter GUI that visualizes the environment and agent; provides controls to run single steps/episodes, train, view tables, save CSV/PNG, and embed a matplotlib live plot of episode rewards.
+- A Tkinter GUI that visualizes the environment and agent; provides controls to run single episodes, train, save CSV/PNG, clear plot and embed a matplotlib live plot of episode rewards.
 
 Files & layout
 --------------
@@ -19,7 +20,7 @@ Files & layout
 - `tests/test_project-name_logic.py` — unit tests for environment/agents/trainer.
 - `requirements.txt` — list runtime dependencies (matplotlib, pillow, pytest optional).
 - `results_csv/` & `plots/` — output folders for CSVs and PNGs.
-- README markdown files `RL_initial.md` describing implementation and how to run.
+- README markdown file describing implementation and how to run.
 
 Functional requirements (detailed)
 ---------------------------------
@@ -75,3 +76,4 @@ Dependencies & environment
 - Python 3.8+ recommended.
 - Runtime dependencies: `matplotlib`, `pillow` (optional but recommended), `pytest` (dev/test).
 - Include a `requirements.txt` listing these packages.
+- do not change the used Python environment
