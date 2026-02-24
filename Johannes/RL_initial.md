@@ -36,7 +36,7 @@ GUI behavior and layout:
 - Main window using a grid with two columns split into labeled panels (ttk.LabelFrame) as follows (top → bottom):
   - `Environment` (top row, full width): specifics will be defined in second markdown file.
   - `Controls` (left column): a 2×3 grid of buttons, arranged as:
-    - Row0: `Run single step` | `Reset All`
+    - Row0: `Reset All` | `Clear Plot`
     - Row1: `Run single episode` | `Save samplings CSV`
     - Row2: `Train and Run` | `Save Plot PNG`
     Buttons should expand horizontally in their cells (sticky='ew').
@@ -44,7 +44,9 @@ GUI behavior and layout:
   - `Current State` (below Controls): single-line status label formatted as space-padded string (padded to the length of the string `Training`) showing `Training:`/`Idle:` then `step` and `episode` counters formatted as space-padded 4-digit numbers e.g. `Training: step:    3  episode:   12` or `    Idle: step:    0  episode:    0`.
   - `Training Parameters` (right column, tight width, spans Controls+Current State rows, do not expand horizontally): parameter inputs for max steps, episodes, policy dropdown, `Live plot` checkbox (default True), `reduced speed` checkbox (default True) next to live plot.  Additional parameters may be defined in the second markdown file.
   - `Live Plot` (bottom, full width): embedded matplotlib canvas that plots episode rewards for past runs and current run.
-    - Make the figure legend clickable. When a legend line is clicked toggle the corresponding run's visibility in `self.plot_runs` and call `_redraw_all_plots()`.
+    - add legend outside right of the plot
+    - entry name should state the policy
+    - add toggle boxes for every legend entry; when an entry is untoggled the corresponding plot's visibility is set to false.
 
 Performance and Responsiveness:
 - Training must run on a background thread. GUI updates use `after(0, ...)` to schedule work on the main thread.
@@ -55,7 +57,6 @@ Performance and Responsiveness:
 User interactions
 -----------------
 - Controls:
-  - `Run single step` keeps a persistent policy instance for single-step accumulation; each click advances by one step (epsilon from epsilon_min), updates model (QL update if present), appends to `_ongoing_transitions`, and animates that single transition without clearing prior path. Update `current_step` using `_set_current_counters` (do not redraw canvas fully just for counters).
   - `Run single episode` resets agent to configured start, runs `Trainer.run_episode(policy, ...)` once and animates the episode transitions sequentially; set `current_episode` to 1 and `current_step` to 0 before running.
   - `Train and Run` executes in a background thread; for each episode:
     - update `current_episode` via `after(0, ...)` helper so GUI label shows progress,
