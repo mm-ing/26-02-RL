@@ -3,8 +3,8 @@
 import tkinter as tk
 from datetime import datetime
 
-city = "Horb am Neckar"
-user_name = "Manfred"
+city = "Aachen"
+user_name = "Atefeh"
 greeting_text = "Have a wonderful day ahead!"
 
 def update_time():
