@@ -340,6 +340,7 @@ class CliffWalkingGUI:
         episodes = max(1, self.episodes_var.get())
         max_steps = max(1, self.max_steps_var.get())
         eps_start = self.eps_start_var.get()
+        policy.epsilon = float(eps_start)
 
         progress_update_every = 10 if fast_mode else 1
         plot_update_every = 5 if fast_mode else 1
@@ -365,7 +366,7 @@ class CliffWalkingGUI:
 
                 result = self.trainer.run_episode(
                     policy=policy,
-                    epsilon=eps_start,
+                    epsilon=None,
                     max_steps=max_steps,
                     progress_callback=progress,
                     transition_callback=transition_cb if render_transitions else None,

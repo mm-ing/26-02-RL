@@ -267,7 +267,7 @@ class Trainer:
     def run_episode(
         self,
         policy: DQNetwork,
-        epsilon: float = 0.1,
+        epsilon: Optional[float] = 0.1,
         max_steps: int = 1000,
         progress_callback: Optional[Callable[[int], None]] = None,
         transition_callback: Optional[Callable[[Transition, int], None]] = None,
@@ -277,7 +277,7 @@ class Trainer:
         transitions: list[Transition] = []
 
         for step in range(1, int(max_steps) + 1):
-            action = policy.select_action(state, epsilon=epsilon)
+            action = policy.select_action(state, epsilon=epsilon if epsilon is not None else None)
             next_state, reward, done, _ = self.env.step(action)
 
             transition = Transition(state, action, next_state, reward, float(done))
@@ -314,10 +314,12 @@ class Trainer:
         rewards: list[float] = []
         rows: list[list] = []
 
+        policy.epsilon = float(epsilon)
+
         for episode in range(1, int(num_episodes) + 1):
             result = self.run_episode(
                 policy=policy,
-                epsilon=epsilon,
+                epsilon=None,
                 max_steps=max_steps,
                 progress_callback=(lambda step, ep=episode: progress_callback(ep, step)) if progress_callback else None,
             )
