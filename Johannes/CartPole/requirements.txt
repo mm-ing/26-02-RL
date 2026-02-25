@@ -1,0 +1,7 @@
+gymnasium
+matplotlib
+numpy
+pillow
+pygame
+pytest
+torch
