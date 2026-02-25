@@ -133,11 +133,11 @@
     - Textfeld: 
 - Episode Configuration
     - Checkbox: Compare Methods (Lässt alle Algorithmen parallel trainieren)
-    - Allgemeine RL-Parameter: Episodes, Max-Steps, Alpha, Gamma, Policy, Pathfinder etc.
+    - Allgemeine RL-Parameter: Episodes, Max-Steps, Alpha, Gamma
     - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: ein Label gefolgt von zwei Textfeldern (Episodes, Max-Steps), (Alpha, Gamma)...
-- Methoden **Tab-Control** (für spezifische Methodenparameter)
-    - **Tab-Header** für die Konfiguration jeder gewählten Methode
-    - **Tab-Content-Panel** für methodenspezifische RL-Parameter wie z.B: Buffer-Size, Target-Update etc...
+- Methoden **Tab-Control** (für spezifische RL-Methodenparameter)
+    - **Tab-Header** für die Konfiguration jeder gewählten RL-Methode
+    - **Tab-Content-Panel** für methodenspezifische RL-Parameter wie z.B: Buffer-Size, Batch-Size,  Learning-Starts, Train-Frequency, Gradient-Step, Target-Update, Initial-Epsilon, Exploration-Fraction, Final-Epsilon, Activation - außer Episodes, Max-Steps, Alpha, Gamma (stehen schon im Panel `Episode Configuration`)
     - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: ein Label gefolgt von zwei Textfeldern 
 - Button: Apply and reset für alle Konfigurationen   
 

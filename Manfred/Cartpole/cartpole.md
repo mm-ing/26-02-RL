@@ -15,7 +15,9 @@
 - Nutze Environment `gymnasium.make("CartPole-v1")`
 - Die Environment-Visualisierung soll die Gymnasium-`CartPole-v1` die animierte grafische Ausgabe.
 - Parameter
-    - sutton_barto_reward (default True)
+    - goal_velocity (default 0.1) 
+    - x_init (default -0.6)
+    - y_init (default -0.4)
      
 ### Algorithmen (auswählbar):
 - DDQN (double dqn)
