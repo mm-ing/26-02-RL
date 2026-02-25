@@ -112,7 +112,7 @@ class EnvironmentRegistry:
 def make_env(
     env_id: str = ENV_ID,
     render_mode: Optional[str] = None,
-    max_episode_steps: int = 200,
+    max_episode_steps: int = 500,
     is_raining: bool = False,
     fickle_passenger: bool = False,
 ) -> gym.Env:

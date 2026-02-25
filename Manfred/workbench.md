@@ -126,22 +126,22 @@
 
 ## UI-Layout:
 - UI vertikal in zwei Bereiche unterteilen, oben 2/3 und 1/3 der Fensterhöhe, oberen der beiden Bereiche wiedrum in zwei Bereiche unterteilen, links 1/3, rechts 2/3. Die Grenzen der Bereiche sollen per Maus verschiebbar sein. Wenn ich den unteren Bereich vergrößern möchte, ziehe ich also die Grenze zwischen oben und unten nach oben.
-- Oben links: Formulare zur Konfiguration
-    - Environment Configuration
-        - Parameter des Environments
-        - Checkbox: Visualisierung aktivieren/deaktivieren (WICHTIG: soll während "Train" klickbar bleiben!)
-        - Textfeld: 
-    - Episode Configuration
-        - Checkbox: Compare Methods (Lässt alle Algorithmen parallel trainieren)
-        - Allgemeine RL-Parameter: Episodes, Max-Steps, Alpha, Gamma, Policy, Pathfinder etc.
-        - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: ein Label gefolgt von zwei Textfeldern (Episodes, Max-Steps), (Alpha, Gamma)...
-    - Methoden Configration
-        - Tab für jede einzelne Methode
-        - Methodenspezifische RL-Parameter: Buffer-Size, Target-Update etc...
-        - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: ein Label gefolgt von zwei Textfeldern 
-    - Button: Apply and reset für alle Konfigurationen   
+### Oben links: Formulare zur Konfiguration (von oben nach unten)
+- Environment Configuration
+    - Parameter des Environments
+    - Checkbox: Visualisierung aktivieren/deaktivieren (WICHTIG: soll während "Train" klickbar bleiben!)
+    - Textfeld: 
+- Episode Configuration
+    - Checkbox: Compare Methods (Lässt alle Algorithmen parallel trainieren)
+    - Allgemeine RL-Parameter: Episodes, Max-Steps, Alpha, Gamma, Policy, Pathfinder etc.
+    - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: ein Label gefolgt von zwei Textfeldern (Episodes, Max-Steps), (Alpha, Gamma)...
+- Methoden **Tab-Control** (für spezifische Methodenparameter)
+    - **Tab-Header** für die Konfiguration jeder gewählten Methode
+    - **Tab-Content-Panel** für methodenspezifische RL-Parameter wie z.B: Buffer-Size, Target-Update etc...
+    - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: ein Label gefolgt von zwei Textfeldern 
+- Button: Apply and reset für alle Konfigurationen   
 
-- Rechts neben Formularen: Environment-Visualisierung (Agent beobachtbar).
+### Rechts neben Formularen: Environment-Visualisierung (Agent beobachtbar).
 	- Die Darstellung MUSS den vorgesehenen Bereich des Fensters ausfüllen, ohne Verzerrung:
 		- Bild/Canvas dynamisch an das Widget-Layout anpassen (Resize-Handler).
 		- Seitenverhältnis der Gymnasium-Grafik strikt beibehalten (keine Streckung).
@@ -152,7 +152,7 @@
     - Intervall (10 ms) muss editierbar sein (Textfeld in Environment Configuration).  
     - Konfiguration für Environment:
         - Wenn das Environment Konfigurationsmöglichkeiten bietet, MÜSSEN diese in dem Formular Environment Configuration editierbar sein. 
-- Unterer Bereich:
+### Unterer Bereich:
     - (volle Fernsterbreite): Plot (X=Episodes, Y=Return)
     - Oberhalb des Plot: Progressbar (Episoden-Fortschritt, volle Fernsterbreite)
     - Zwischen Progressbar und Plot Buttons über volle Fensterbreite in einer Reihe anordnen. Reduziere bei Bedarf die Button-Höhe/-Breite/Padding oder verwende ein kompaktes Style-Variant, das standardmäßig aktiviert ist, bis genügend Platz zur Verfügung steht.Dynamische Anpassung: Falls das Fenster später vergrößert wird, dürfen die Buttons wieder in die großzügigere Variante wechseln; die Logik muss automatisch reagieren.
