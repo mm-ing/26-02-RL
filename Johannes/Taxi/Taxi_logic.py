@@ -1,4 +1,5 @@
 from __future__ import annotations
+"""Core RL logic for Taxi: environment wrapper, agents, replay buffers, and trainer."""
 
 import csv
 import os
@@ -18,12 +19,14 @@ from gymnasium.error import ResetNeeded
 
 
 def _one_hot_state(state: int, n_states: int) -> np.ndarray:
+    """Encode discrete Taxi state id into a one-hot vector for neural networks."""
     vec = np.zeros(n_states, dtype=np.float32)
     vec[state] = 1.0
     return vec
 
 
 class QNetwork(nn.Module):
+    """Standard feed-forward Q-network used by DQN variants."""
     def __init__(self, state_size: int, action_size: int, hidden_size: int = 128) -> None:
         super().__init__()
         self.model = nn.Sequential(
@@ -39,6 +42,7 @@ class QNetwork(nn.Module):
 
 
 class DuelingQNetwork(nn.Module):
+    """Dueling architecture separating value and advantage streams."""
     def __init__(self, state_size: int, action_size: int, hidden_size: int = 128) -> None:
         super().__init__()
         self.feature = nn.Sequential(
@@ -65,6 +69,7 @@ class DuelingQNetwork(nn.Module):
 
 @dataclass
 class Transition:
+    """Single replay transition tuple."""
     state: int
     action: int
     reward: float
@@ -73,6 +78,7 @@ class Transition:
 
 
 class ReplayBuffer:
+    """Uniform experience replay buffer."""
     def __init__(self, capacity: int = 50_000) -> None:
         self.capacity = capacity
         self.buffer: Deque[Transition] = deque(maxlen=capacity)
@@ -88,6 +94,7 @@ class ReplayBuffer:
 
 
 class PrioritizedReplayBuffer:
+    """Prioritized replay buffer with proportional sampling."""
     def __init__(self, capacity: int = 50_000, alpha: float = 0.6) -> None:
         self.capacity = capacity
         self.alpha = alpha
@@ -116,12 +123,15 @@ class PrioritizedReplayBuffer:
         else:
             prios = self.priorities[: len(self.buffer)]
 
+        # Convert priorities to a probability distribution (proportional prioritization).
         probs = prios ** self.alpha
         probs = probs / probs.sum()
 
+        # Draw batch indices according to replay priorities.
         indices = np.random.choice(len(self.buffer), batch_size, p=probs)
         samples = [self.buffer[idx] for idx in indices]
 
+        # Importance-sampling weights reduce sampling bias during optimization.
         weights = (len(self.buffer) * probs[indices]) ** (-beta)
         weights = weights / weights.max()
         return samples, indices, weights.astype(np.float32)
@@ -132,6 +142,7 @@ class PrioritizedReplayBuffer:
 
 
 class BaseDQNAgent:
+    """Base DQN agent with target network and replay-based learning."""
     def __init__(
         self,
         state_size: int,
@@ -176,6 +187,7 @@ class BaseDQNAgent:
         return torch.from_numpy(vec).float().unsqueeze(0).to(self.device)
 
     def select_action(self, state: int, epsilon: float = 0.1) -> int:
+        """Epsilon-greedy action selection."""
         if random.random() < epsilon:
             return random.randrange(self.action_size)
 
@@ -191,6 +203,7 @@ class BaseDQNAgent:
             return self.target_network(next_states).max(dim=1, keepdim=True)[0]
 
     def learn(self) -> Optional[float]:
+        """Run one gradient update step from replay buffer if enough samples exist."""
         if len(self.replay_buffer) < self.batch_size:
             return None
 
@@ -214,9 +227,11 @@ class BaseDQNAgent:
 
         q_pred = self.q_network(states).gather(1, actions)
         q_next = self._compute_target_q(next_states)
+        # Standard bootstrapped Bellman target.
         q_target = rewards + self.gamma * q_next * (1.0 - dones)
 
         td_error = q_pred - q_target
+        # Per-sample Huber losses allow prioritized replay re-weighting.
         losses = self.loss_fn(q_pred, q_target) * weight_t
         loss = losses.mean()
 
@@ -226,6 +241,7 @@ class BaseDQNAgent:
         self.optimizer.step()
 
         if isinstance(self.replay_buffer, PrioritizedReplayBuffer) and indices is not None:
+            # Update replay priorities from latest absolute TD errors.
             priorities = torch.abs(td_error).detach().cpu().numpy().flatten() + 1e-6
             self.replay_buffer.update_priorities(indices, priorities)
 
@@ -237,10 +253,12 @@ class BaseDQNAgent:
 
 
 class DQN(BaseDQNAgent):
+    """Vanilla DQN policy."""
     pass
 
 
 class DoubleDQN(BaseDQNAgent):
+    """Double DQN using online argmax and target-network evaluation."""
     def _compute_target_q(self, next_states: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
             next_actions = torch.argmax(self.q_network(next_states), dim=1, keepdim=True)
@@ -248,11 +266,13 @@ class DoubleDQN(BaseDQNAgent):
 
 
 class DuelingDQN(BaseDQNAgent):
+    """DQN with dueling network head."""
     def _build_network(self, hidden_size: int) -> nn.Module:
         return DuelingQNetwork(self.state_size, self.action_size, hidden_size)
 
 
 class PrioDQN(BaseDQNAgent):
+    """DQN variant using prioritized replay sampling."""
     def __init__(self, *args, priority_alpha: float = 0.6, **kwargs) -> None:
         self.priority_alpha = priority_alpha
         super().__init__(*args, **kwargs)
@@ -262,6 +282,7 @@ class PrioDQN(BaseDQNAgent):
 
 
 class TaxiEnvironment:
+    """Gymnasium Taxi-v3 wrapper with deterministic project-specific toggles."""
     def __init__(
         self,
         is_raining: bool = False,
@@ -292,6 +313,7 @@ class TaxiEnvironment:
         return int(obs)
 
     def _apply_rain_dynamics(self, action: int) -> int:
+        """Simulate rain by deterministically perturbing movement actions."""
         if not self.is_raining:
             return action
 
@@ -300,6 +322,7 @@ class TaxiEnvironment:
         return action
 
     def _apply_fickle_reward(self, reward: float, action: int) -> float:
+        """Shape rewards to model a fickle passenger behavior."""
         if not self.fickle_passenger:
             return reward
 
@@ -311,6 +334,7 @@ class TaxiEnvironment:
         return reward
 
     def step(self, action: int) -> Tuple[int, float, bool, Dict]:
+        """Execute one environment step with optional mode effects."""
         self.episode_step += 1
         real_action = self._apply_rain_dynamics(action)
         next_state, reward, terminated, truncated, info = self.env.step(real_action)
@@ -321,6 +345,7 @@ class TaxiEnvironment:
         return int(next_state), float(reward), done, info
 
     def render_rgb(self) -> Optional[np.ndarray]:
+        """Render RGB frame; auto-reset if Gym requires reset before rendering."""
         try:
             frame = self.env.render()
         except ResetNeeded:
@@ -350,6 +375,7 @@ class TaxiEnvironment:
         return tuple(self.env.unwrapped.decode(int(state)))
 
     def is_reachable(self, state: int, target_state: int) -> bool:
+        """Check one-step reachability from a given state via any action."""
         sim_env = gym.make("Taxi-v3")
         try:
             sim_env.reset(seed=0)
@@ -368,6 +394,7 @@ class TaxiEnvironment:
 
 
 class Trainer:
+    """Episode runner and multi-episode trainer with optional CSV transition export."""
     def __init__(
         self,
         environment: TaxiEnvironment,
@@ -384,6 +411,7 @@ class Trainer:
         max_steps: int = 1000,
         progress_callback: Optional[Callable[[int], None]] = None,
     ) -> Dict:
+        """Run one episode and return reward, steps, and sampled transitions."""
         state = self.environment.reset()
         total_reward = 0.0
         transitions: List[Tuple[int, int, float, int, bool]] = []
@@ -423,6 +451,7 @@ class Trainer:
         epsilon: float,
         save_csv: Optional[str] = None,
     ) -> List[float]:
+        """Run multiple episodes and optionally persist sampled transitions to CSV."""
         rewards: List[float] = []
         csv_rows: List[Tuple[int, int, int, float, int, bool]] = []
 
@@ -451,6 +480,7 @@ class Trainer:
 
 
 def build_agent(policy_name: str, **kwargs) -> BaseDQNAgent:
+    """Factory for constructing the selected DQN policy class."""
     policy_name = policy_name.strip().lower()
     registry = {
         "dqn": DQN,

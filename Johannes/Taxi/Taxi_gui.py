@@ -1,4 +1,5 @@
 from __future__ import annotations
+"""Tkinter GUI for Taxi RL training, visualization, and artifact export."""
 
 import threading
 import time
@@ -24,6 +25,7 @@ except Exception:
 
 
 class TaxiGUI:
+    """Main GUI controller handling layout, interaction, and threaded training flow."""
     def __init__(self, root: tk.Tk, environment: TaxiEnvironment, trainer: Trainer) -> None:
         self.root = root
         self.environment = environment
@@ -50,16 +52,19 @@ class TaxiGUI:
         self._set_current_counters(0, 0, training=False)
 
     def _safe_after(self, callback) -> None:
+        """Schedule callback on Tk main thread if the window is still alive."""
         if self._is_shutting_down:
             return
         try:
             if int(self.root.winfo_exists()) != 1:
                 return
+            # Marshal background thread updates onto Tk's UI thread.
             self.root.after(0, callback)
         except (tk.TclError, RuntimeError):
             return
 
     def _safe_showinfo(self, title: str, message: str) -> None:
+        """Show message dialog only when GUI is active, avoiding shutdown races."""
         if self._is_shutting_down:
             return
         try:
@@ -70,6 +75,7 @@ class TaxiGUI:
             return
 
     def _build_variables(self) -> None:
+        """Initialize all Tk variables for environment, training, and model parameters."""
         self.is_raining_var = tk.BooleanVar(value=False)
         self.fickle_passenger_var = tk.BooleanVar(value=False)
 
@@ -93,6 +99,7 @@ class TaxiGUI:
         self.prio_alpha_var = tk.DoubleVar(value=0.60)
 
     def _build_layout(self) -> None:
+        """Create panel grid layout for environment, controls, parameters, and plot."""
         main = ttk.Frame(self.root, padding=10)
         main.grid(row=0, column=0, sticky="nsew")
         self.root.columnconfigure(0, weight=1)
@@ -247,6 +254,7 @@ class TaxiGUI:
         )
 
     def _set_current_counters(self, episode: int, step: int, training: bool = True) -> None:
+        """Update status label with padded Training/Idle state, step, and episode counters."""
         self.current_episode = episode
         self.current_step = step
         status = "Training" if training else "Idle"
@@ -254,6 +262,7 @@ class TaxiGUI:
         self.current_status_var.set(f"{padded_status}: step:{step:5d}  episode:{episode:5d}")
 
     def _render_environment(self) -> None:
+        """Render current Taxi frame into the Environment panel."""
         frame = self.environment.render_rgb()
         if frame is None:
             self.env_canvas_label.configure(text="Environment frame not available.")
@@ -286,7 +295,9 @@ class TaxiGUI:
         return f"{policy_name} [{timestamp}]"
 
     def _update_plot(self, current_rewards: Optional[List[float]] = None, run_name: Optional[str] = None) -> None:
+        """Refresh reward + moving-average lines with throttled redraw cadence."""
         now = time.time()
+        # Throttle redraw to keep UI responsive during fast training loops.
         if now - self._last_plot_update < 0.15:
             return
         self._last_plot_update = now
@@ -359,6 +370,7 @@ class TaxiGUI:
         }
 
     def _create_agent(self) -> None:
+        """Instantiate selected policy using current DNN parameter values."""
         policy = self.policy_var.get()
         params = self._collect_agent_params()
         if policy == "PrioDQN":
@@ -381,6 +393,7 @@ class TaxiGUI:
         self._refresh_plot_toggles()
 
     def _on_run_single_episode(self) -> None:
+        """Run one episode on a worker thread and animate progress in the GUI."""
         if self._train_thread and self._train_thread.is_alive():
             return
 
@@ -414,6 +427,7 @@ class TaxiGUI:
         self._train_thread.start()
 
     def _on_train_and_run(self) -> None:
+        """Run multi-episode training in background thread with live progress updates."""
         if self._train_thread and self._train_thread.is_alive():
             return
 
@@ -442,6 +456,7 @@ class TaxiGUI:
                 def progress(step: int, e: int = ep) -> None:
                     self._safe_after(lambda ee=e, ss=step: self._set_current_counters(ee, ss, training=True))
                     render_every = max(1, int(self.render_every_n_var.get()))
+                    # Refresh the environment view every N steps (user configurable).
                     if step % render_every == 0:
                         self._safe_after(self._render_environment)
 
@@ -469,6 +484,7 @@ class TaxiGUI:
         self._train_thread.start()
 
     def _on_save_samplings_csv(self) -> None:
+        """Generate transition samplings CSV via trainer in a background thread."""
         if self._train_thread and self._train_thread.is_alive():
             return
 
@@ -495,6 +511,7 @@ class TaxiGUI:
         self._train_thread.start()
 
     def _on_save_plot_png(self) -> None:
+        """Save current embedded matplotlib figure into the plots directory."""
         out_dir = Path("plots")
         out_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -532,6 +549,7 @@ class TaxiGUI:
         self._set_current_counters(0, 0, training=False)
 
     def shutdown(self) -> None:
+        """Request stop, join worker thread briefly, and close environment resources."""
         self._is_shutting_down = True
         self._stop_requested = True
         if self._train_thread and self._train_thread.is_alive():

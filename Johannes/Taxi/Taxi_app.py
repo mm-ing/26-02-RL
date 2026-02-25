@@ -1,4 +1,5 @@
 from __future__ import annotations
+"""Application entry point for the Taxi RL GUI."""
 
 import tkinter as tk
 
@@ -7,6 +8,7 @@ from Taxi_logic import TaxiEnvironment, Trainer
 
 
 def main() -> None:
+    """Create environment, trainer, and GUI, then start the Tk event loop."""
     env = TaxiEnvironment(render_mode="rgb_array")
     trainer = Trainer(env, results_dir="results_csv")
 
