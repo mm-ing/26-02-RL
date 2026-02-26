@@ -24,7 +24,7 @@
 - Eigenständig, wird vom Algorithmus intern instanziiert.
 - Interface: `add(s, a, r, s', done)`, `sample(batch_size) -> TensorBatch`.
 
-### 3. `AlgorithmBase` (Abstract) → PPO, TD3, SAC, …
+### 3. `AlgorithmBase` (Abstract) 
 - Verantwortung: NUR Netzwerk-Architektur + Parameter-Updates.
 - Interface:
   - `select_action(state, explore=True) -> action`
@@ -126,18 +126,22 @@
 
 ## UI-Layout:
 - UI vertikal in zwei Bereiche unterteilen, oben 2/3 und 1/3 der Fensterhöhe, oberen der beiden Bereiche wiedrum in zwei Bereiche unterteilen, links 1/3, rechts 2/3. Die Grenzen der Bereiche sollen per Maus verschiebbar sein. Wenn ich den unteren Bereich vergrößern möchte, ziehe ich also die Grenze zwischen oben und unten nach oben.
-- Oben links: Formulare zur Konfiguration
-    - Environment Configuration
-        - Parameter des Environments
-        - Button: Apply and reset
-        - Checkbox: Visualisierung aktivieren/deaktivieren (WICHTIG: soll während "Train" klickbar bleiben!)
-        - Textfeld: 
-    - Episode Configuration
-        - RL-Parameter: Episodes, Max-Steps, Alpha, Gamma, Epsilon max, Epsilon min, Policy, Pathfinder etc.
-        - Checkbox: Compare Methods (Lässt alle Algorithmen parallel trainieren)
-        - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: ein Label gefolgt von zwei Textfeldern (Episodes, Max-Steps), (Alpha, Gamma),(Epsilon min, max) 
+### Oben links: Formulare zur Konfiguration (von oben nach unten)
+- Environment Configuration
+    - Parameter des Environments
+    - Checkbox: Visualisierung aktivieren/deaktivieren (WICHTIG: soll während "Train" klickbar bleiben!)
+    - Textfeld: 
+- Episode Configuration
+    - Checkbox: Compare Methods (Lässt alle Algorithmen parallel trainieren)
+    - Allgemeine RL-Parameter: Episodes, Max-Steps, Alpha, Gamma
+    - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: ein Label gefolgt von zwei Textfeldern (Episodes, Max-Steps), (Alpha, Gamma)...
+- Methoden **Tab-Control** (für spezifische RL-Methodenparameter)
+    - **Tab-Header** für die Konfiguration jeder gewählten RL-Methode
+    - **Tab-Content-Panel** für methodenspezifische RL-Parameter wie z.B: Buffer-Size, Batch-Size,  Learning-Starts, Train-Frequency, Gradient-Step, Target-Update, Initial-Epsilon, Exploration-Fraction, Final-Epsilon, Activation - außer Episodes, Max-Steps, Alpha, Gamma (stehen schon im Panel `Episode Configuration`)
+    - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: ein Label gefolgt von zwei Textfeldern 
+- Button: Apply and reset für alle Konfigurationen   
 
-- Rechts neben Formularen: Environment-Visualisierung (Agent beobachtbar).
+### Rechts neben Formularen: Environment-Visualisierung (Agent beobachtbar).
 	- Die Darstellung MUSS den vorgesehenen Bereich des Fensters ausfüllen, ohne Verzerrung:
 		- Bild/Canvas dynamisch an das Widget-Layout anpassen (Resize-Handler).
 		- Seitenverhältnis der Gymnasium-Grafik strikt beibehalten (keine Streckung).
@@ -148,14 +152,16 @@
     - Intervall (10 ms) muss editierbar sein (Textfeld in Environment Configuration).  
     - Konfiguration für Environment:
         - Wenn das Environment Konfigurationsmöglichkeiten bietet, MÜSSEN diese in dem Formular Environment Configuration editierbar sein. 
-- Unterer Bereich:
+### Unterer Bereich:
     - (volle Fernsterbreite): Plot (X=Episodes, Y=Return)
     - Oberhalb des Plot: Progressbar (Episoden-Fortschritt, volle Fernsterbreite)
     - Zwischen Progressbar und Plot Buttons über volle Fensterbreite in einer Reihe anordnen. Reduziere bei Bedarf die Button-Höhe/-Breite/Padding oder verwende ein kompaktes Style-Variant, das standardmäßig aktiviert ist, bis genügend Platz zur Verfügung steht.Dynamische Anpassung: Falls das Fenster später vergrößert wird, dürfen die Buttons wieder in die großzügigere Variante wechseln; die Logik muss automatisch reagieren.
         - `Add Job` (Fügt TrainingJob hinzu - gewählter Algorithmus, Episodenkonfiguartion etc. )
         - `Train` (startet das training aller TrainingJobs, die im Status pending sind)          
         - `Save plot` (als Bild speichern)
-        - `Cancel Training` (bricht alle laufenden TrainingJobs ab)
+        - `Cancel Training` (bricht alle laufenden 
+        TrainingJobs ab)
+        - `Reset Training` löscht den aktuellen Plot und beginnt für alle Methoden wieder bei der ersten Episode
     - Plot-Legende: standardmäßig oben rechts; wenn die ersten 4 episoden überschitten werden, nach unten links verschieben.
 
 ## Layout-Stabilität (wichtig)
@@ -166,6 +172,10 @@
 - **Stabiler Button-Zustand**: Tracke aktuellen Button-Style in State; aktualisiere Widgets nur bei tatsächlichem Stilwechsel.
 - **Leichte Resize-Handler**: Resize-Handler nur Lese-Checks und `after()`-Scheduling enthalten; schwere Berechnungen in einem debounced Callback ausführen.
 - **Vermeide schwankende Größenabhängigkeiten**: Buttons und Plot sollten auf `expand/fill` mit Panedwindow/Gewichten basieren, nicht auf dynamischen Sichtbarkeits-/Größenänderungen die Layout-Neuberechnungen erzwingen.
+
+### Neural Networks
+- !!!Wichtige Hyperparameter der neuralen Netzwerke der Methoden editierbar machen!!!
+- Hyperparameter mit bekannten effektiven Werten vorbelegen
 
 ## Plot-Anforderungen:
 - Moving-Average als dicke Linie im Vordergrund
@@ -252,6 +262,7 @@ Diese Regeln sind verpflichtend für die Implementierung des Training-Status-Fen
 - Prüfe anschließend nacheinander für jeden Reinforcement Learning Algorithmus einzeln:
     1. Ist die Implementierung des Algorithmus korrekt umgesetzt?
     2. Sind die Neuronalen Netze korrekt implementiert?
+    3. Sind Trainingserfolge für jede Methode nachweisbar
     3. Sind Oprimierungen nötig, um einen Trainingserfolg zu erreichen oder ihn zu verbessern
     4. Prüfe, ob die UI alle Parameter des Algorithmus zum Editieren anbietet und mit sinnvollen defaults vorbelegt
     5. Nimm die sich aus 1., 2., 3. und 4. ergebenden Anpassungen vor

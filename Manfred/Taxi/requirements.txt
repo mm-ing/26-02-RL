@@ -1,0 +1,7 @@
+gymnasium[toy-text]
+stable-baselines3
+torch
+numpy
+matplotlib
+pillow
+pytest

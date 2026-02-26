@@ -1,10 +1,10 @@
 # RL-Workbench für cliff_walker
-## Anforderungen:
 
-- !!! WICHTIG !!!: Immer [Workbench-init.md](../Workbench-init.md) berücksichtigen.
-	- Alle Regeln aus [Workbench-init.md](../Workbench-init.md) gelten verbindlich.
+## Vorrausetzungen:
+- !!! WICHTIG !!!: Immer [Workbench.md](../Workbench.md) berücksichtigen.
+	- Alle Regeln aus [Workbench.md](../Workbench.md) gelten verbindlich.
 	- Prompt/Arbeitsweise strikt nach diesen Regeln.
-    - Führe die Anweisungen in [Workbench-init.md](../Workbench-init.md) aus
+    - Führe die Anweisungen in [Workbench.md](../Workbench.md) aus
 
 ## Spezielle Anforderungen
 - Parameter:
