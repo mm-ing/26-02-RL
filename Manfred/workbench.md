@@ -132,14 +132,21 @@
     - Checkbox: Visualisierung aktivieren/deaktivieren (WICHTIG: soll während "Train" klickbar bleiben!)
     - Textfeld: 
 - Episode Configuration
-    - Checkbox: Compare Methods (Lässt alle Algorithmen parallel trainieren)
-    - Allgemeine RL-Parameter: Episodes, Max-Steps, Alpha, Gamma
-    - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: ein Label gefolgt von zwei Textfeldern (Episodes, Max-Steps), (Alpha, Gamma)...
+    - Checkbox: `Compare Methods` (Lässt alle Algorithmen parallel trainieren)
+    - Allgemeine RL-Parameter: Episodes (!!!default 3000), Max-Steps, Alpha, Gamma
+    - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: 2x ein Label gefolgt einem Textfeld (Episodes, Max-Steps), (Alpha, Gamma)...
+- Parameter Tuning
+    - Checkbox: `Enable Tuning` (Lässt ausgewählte Methode mit allen Einstellungen zwischen Min und Max mit dem Inkrement Step parallel trainieren)
+    - Dropdown für die: Parameter-Auswahl
+    - Max
+    - Min
+    - Step
+    - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: 2x ein Label gefolgt einem Textfeld
 - Methoden **Tab-Control** (für spezifische RL-Methodenparameter)
     - **Tab-Header** für die Konfiguration jeder gewählten RL-Methode
-    - **Tab-Content-Panel** für methodenspezifische RL-Parameter wie z.B: Buffer-Size, Batch-Size,  Learning-Starts, Train-Frequency, Gradient-Step, Target-Update, Initial-Epsilon, Exploration-Fraction, Final-Epsilon, Activation - außer Episodes, Max-Steps, Alpha, Gamma (stehen schon im Panel `Episode Configuration`)
-    - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: ein Label gefolgt von zwei Textfeldern 
-- Button: Apply and reset für alle Konfigurationen   
+    - **Tab-Content-Panel** für methodenspezifische RL-Parameter wie z.B: Buffer-Size, Batch-Size,  Learning-Starts, Train-Frequency, Gradient-Step, Target-Update, Initial-Epsilon, Exploration-Fraction, Final-Epsilon, Activation - !!!außer Episodes, Max-Steps, Alpha, Gamma (!!!stehen schon im Panel `Episode Configuration`)
+    - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: 2x ein Label gefolgt einem Textfeld 
+- Button: `Apply and Reset` für alle Konfigurationen !!!auch für die Checkboxen `Compare Methods` und `Enable Tuning`
 
 ### Rechts neben Formularen: Environment-Visualisierung (Agent beobachtbar).
 	- Die Darstellung MUSS den vorgesehenen Bereich des Fensters ausfüllen, ohne Verzerrung:
@@ -153,16 +160,18 @@
     - Konfiguration für Environment:
         - Wenn das Environment Konfigurationsmöglichkeiten bietet, MÜSSEN diese in dem Formular Environment Configuration editierbar sein. 
 ### Unterer Bereich:
-    - (volle Fernsterbreite): Plot (X=Episodes, Y=Return)
-    - Oberhalb des Plot: Progressbar (Episoden-Fortschritt, volle Fernsterbreite)
-    - Zwischen Progressbar und Plot Buttons über volle Fensterbreite in einer Reihe anordnen. Reduziere bei Bedarf die Button-Höhe/-Breite/Padding oder verwende ein kompaktes Style-Variant, das standardmäßig aktiviert ist, bis genügend Platz zur Verfügung steht.Dynamische Anpassung: Falls das Fenster später vergrößert wird, dürfen die Buttons wieder in die großzügigere Variante wechseln; die Logik muss automatisch reagieren.
-        - `Add Job` (Fügt TrainingJob hinzu - gewählter Algorithmus, Episodenkonfiguartion etc. )
-        - `Train` (startet das training aller TrainingJobs, die im Status pending sind)          
-        - `Save plot` (als Bild speichern)
-        - `Cancel Training` (bricht alle laufenden 
-        TrainingJobs ab)
-        - `Reset Training` löscht den aktuellen Plot und beginnt für alle Methoden wieder bei der ersten Episode
-    - Plot-Legende: standardmäßig oben rechts; wenn die ersten 4 episoden überschitten werden, nach unten links verschieben.
+- (volle Fernsterbreite): Plot (X=Episodes, Y=Return)
+- Oberhalb des Plot: Progressbar (Episoden-Fortschritt, volle Fernsterbreite)
+- Zwischen Progressbar und Plot Buttons über volle Fensterbreite in einer Reihe anordnen. Reduziere bei Bedarf die Button-Höhe/-Breite/Padding oder verwende ein kompaktes Style-Variant, das standardmäßig aktiviert ist, bis genügend Platz zur Verfügung steht.Dynamische Anpassung: Falls das Fenster später vergrößert wird, dürfen die Buttons wieder in die großzügigere Variante wechseln; die Logik muss automatisch reagieren.
+    - `Add Job` (Fügt TrainingJob hinzu - gewählter Algorithmus, Episodenkonfiguartion etc. )
+    - `Train` (startet das training aller TrainingJobs, die im Status pending sind)  
+    - `Training status` (öffnet modales Fenster und zeigt aktuelle Zustände des Trainings)        
+    - `Save image` (mit Methoden-Name als Dateiname als Bild speichern)
+    - `Save content`(mit Methoden-Name den Inhalt des Plots, die Zahlen, als JSON-Datei speichern)
+    - `Load content`(JSON-Datei auswählen lassen und dann sichtbar in den Plot laden)
+    - `Cancel Training` (bricht alle laufenden TrainingJobs ab)
+    - `Reset Training` löscht den aktuellen Plot und beginnt für alle Methoden wieder bei der ersten Episode
+- Plot-Legende: rechts außerhalb des Plots.
 
 ## Layout-Stabilität (wichtig)
 - **Resize-Debounce**: Resize-Handler dürfen nicht bei jedem Configure-Event komplett neu berechnen oder Styles wechseln. Verwende einen Debounce von ~100 ms (`after()` / `after_cancel()`) bevor Layout-Änderungen angewendet werden.
