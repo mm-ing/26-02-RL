@@ -1,4 +1,4 @@
-# RL-Workbench reinforcement learning für gymnasium cartpole
+# RL-Workbench reinforcement learning für gymnasium LunarLander
 
 ## Vorrausetzungen:
 - !!! WICHTIG !!!: Immer [Workbench.md](../Workbench.md) berücksichtigen.
@@ -9,15 +9,17 @@
 ## Spezielle Anforderungen
 
 ### Projekt
-- [projektname] = `mountain_car`
+- [projektname] = `lunar_lander`
 
 ### Animation
-- Nutze Environment `gymnasium.make("MountainCar-v0")`
-- Die Environment-Visualisierung soll die Gymnasium-`MountainCar-v0` die animierte grafische Ausgabe.
+- Nutze Environment `gymnasium.make("LunarLander-v3")`
+- Die Environment-Visualisierung soll die Gymnasium-`LunarLander-v3` die animierte grafische Ausgabe.
 - Parameter
-    - goal_velocity (default 0.0)
-    - x_init (default np.pi)
-    - y_init (default 1)
+    - continuous (default False)
+    - gravity (default -10.0)
+    - enable_wind (default False)
+    - wind_power (default 15.0)
+    - turbulence_power (default 1.5)
      
 ### Algorithmen (auswählbar):
 - D3QN (Double + Dueling)
@@ -27,7 +29,3 @@
 - Alle Hyperparameter der einzelnen Methoden, wie z.B. der Relay-Buffer als auch die Hyperparameter der neuronalen Netze sollen einstellbar sein. 
 
 ---
-
-
-
-
