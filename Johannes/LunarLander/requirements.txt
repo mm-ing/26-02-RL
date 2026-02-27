@@ -1,0 +1,7 @@
+gymnasium[box2d]
+pygame
+torch
+numpy
+matplotlib
+pillow
+pytest
