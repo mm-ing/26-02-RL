@@ -165,6 +165,9 @@ class TrainingStatusWindow(tk.Toplevel):
 
 
 class WorkbenchUI:
+    DQN_METHODS = ["D3QN", "Double DQN + Prioritized Experience Replay", "Dueling DQN"]
+    PG_METHODS = ["PPO", "A2C", "TRPO", "SAC"]
+
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("RL Workbench - LunarLander")
@@ -256,7 +259,7 @@ class WorkbenchUI:
         ttk.Checkbutton(env_box, text="Visualize", variable=self.visualize_var).grid(row=6, column=0, sticky="w", padx=4, pady=2)
 
         ttk.Label(env_box, text="Frame interval (ms)").grid(row=6, column=1, sticky="w", padx=4, pady=2)
-        self.frame_interval_var = tk.StringVar(value="10")
+        self.frame_interval_var = tk.StringVar(value="50")
         ttk.Entry(env_box, textvariable=self.frame_interval_var, width=8).grid(row=6, column=1, sticky="e", padx=4, pady=2)
 
         episode_box = ttk.LabelFrame(parent, text="Episode Configuration")
@@ -265,7 +268,11 @@ class WorkbenchUI:
             episode_box.columnconfigure(i, weight=1)
 
         self.compare_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(episode_box, text="Compare Methods", variable=self.compare_var).grid(row=0, column=0, columnspan=4, sticky="w", padx=4, pady=2)
+        ttk.Checkbutton(episode_box, text="Compare Methods", variable=self.compare_var).grid(row=0, column=0, columnspan=2, sticky="w", padx=4, pady=2)
+        self.compare_family_var = tk.StringVar(value="DQN")
+        self.compare_family_var.trace_add("write", self._on_compare_family_changed)
+        ttk.Radiobutton(episode_box, text="DQN", value="DQN", variable=self.compare_family_var).grid(row=0, column=2, sticky="w", padx=4, pady=2)
+        ttk.Radiobutton(episode_box, text="PG", value="PG", variable=self.compare_family_var).grid(row=0, column=3, sticky="w", padx=4, pady=2)
 
         ttk.Label(episode_box, text="Episodes").grid(row=1, column=0, sticky="w", padx=4, pady=2)
         self.episodes_var = tk.StringVar(value="3000")
@@ -282,6 +289,19 @@ class WorkbenchUI:
         ttk.Label(episode_box, text="Gamma").grid(row=2, column=2, sticky="w", padx=4, pady=2)
         self.gamma_var = tk.StringVar(value="0.99")
         ttk.Entry(episode_box, textvariable=self.gamma_var, width=10).grid(row=2, column=3, sticky="ew", padx=4, pady=2)
+
+        ttk.Label(episode_box, text="LR-Algorithm").grid(row=3, column=0, sticky="w", padx=4, pady=2)
+        self.lr_algorithm_var = tk.StringVar(value="Constant")
+        ttk.Combobox(
+            episode_box,
+            textvariable=self.lr_algorithm_var,
+            values=["Constant", "Linear Decay", "Exponential Decay", "Step Decay"],
+            state="readonly",
+        ).grid(row=3, column=1, columnspan=3, sticky="ew", padx=4, pady=2)
+
+        ttk.Label(episode_box, text="Eval Interval").grid(row=4, column=0, sticky="w", padx=4, pady=2)
+        self.eval_interval_var = tk.StringVar(value="5")
+        ttk.Entry(episode_box, textvariable=self.eval_interval_var, width=10).grid(row=4, column=1, sticky="ew", padx=4, pady=2)
 
         tune_box = ttk.LabelFrame(parent, text="Parameter Tuning")
         tune_box.grid(row=2, column=0, sticky="ew", padx=8, pady=6)
@@ -318,6 +338,7 @@ class WorkbenchUI:
 
         self.method_notebook = ttk.Notebook(method_box)
         self.method_notebook.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
+        self.method_notebook.bind("<<NotebookTabChanged>>", self._on_method_tab_changed)
         self._build_method_tabs()
 
         ttk.Button(parent, text="Apply and Reset", command=self._on_apply_reset).grid(row=4, column=0, sticky="ew", padx=8, pady=8)
@@ -367,6 +388,66 @@ class WorkbenchUI:
                 "exploration_initial_eps": "1.0",
                 "exploration_final_eps": "0.05",
                 "hidden_layers": "256,256,128",
+                "activation": "relu",
+            },
+            "PPO": {
+                "learning_rate": "0.0003",
+                "gamma": "0.99",
+                "buffer_size": "100000",
+                "batch_size": "64",
+                "learning_starts": "5000",
+                "train_freq": "2048",
+                "gradient_steps": "10",
+                "target_update_interval": "300",
+                "exploration_fraction": "0.25",
+                "exploration_initial_eps": "1.0",
+                "exploration_final_eps": "0.05",
+                "hidden_layers": "256,256",
+                "activation": "relu",
+            },
+            "A2C": {
+                "learning_rate": "0.0007",
+                "gamma": "0.99",
+                "buffer_size": "100000",
+                "batch_size": "64",
+                "learning_starts": "5000",
+                "train_freq": "5",
+                "gradient_steps": "1",
+                "target_update_interval": "300",
+                "exploration_fraction": "0.25",
+                "exploration_initial_eps": "1.0",
+                "exploration_final_eps": "0.05",
+                "hidden_layers": "256,256",
+                "activation": "relu",
+            },
+            "TRPO": {
+                "learning_rate": "0.0003",
+                "gamma": "0.99",
+                "buffer_size": "100000",
+                "batch_size": "128",
+                "learning_starts": "5000",
+                "train_freq": "1024",
+                "gradient_steps": "10",
+                "target_update_interval": "300",
+                "exploration_fraction": "0.25",
+                "exploration_initial_eps": "1.0",
+                "exploration_final_eps": "0.05",
+                "hidden_layers": "256,256",
+                "activation": "relu",
+            },
+            "SAC": {
+                "learning_rate": "0.0003",
+                "gamma": "0.99",
+                "buffer_size": "200000",
+                "batch_size": "256",
+                "learning_starts": "10000",
+                "train_freq": "1",
+                "gradient_steps": "1",
+                "target_update_interval": "1",
+                "exploration_fraction": "0.25",
+                "exploration_initial_eps": "1.0",
+                "exploration_final_eps": "0.05",
+                "hidden_layers": "256,256",
                 "activation": "relu",
             },
         }
@@ -490,6 +571,7 @@ class WorkbenchUI:
         return AlgorithmConfig(
             algorithm=method_name,
             learning_rate=float(self.alpha_var.get()),
+            lr_algorithm=self.lr_algorithm_var.get(),
             gamma=float(self.gamma_var.get()),
             buffer_size=int(float(values["buffer_size"].get())),
             batch_size=int(float(values["batch_size"].get())),
@@ -510,6 +592,7 @@ class WorkbenchUI:
         return EpisodeConfig(
             episodes=int(self.episodes_var.get()),
             max_steps=int(self.max_steps_var.get()),
+            eval_interval=max(1, int(self.eval_interval_var.get())),
         )
 
     def _build_tune_cfg(self) -> TuneConfig:
@@ -529,6 +612,20 @@ class WorkbenchUI:
             "wind_power": float(self.wind_power_var.get()),
             "turbulence_power": float(self.turbulence_power_var.get()),
         }
+
+    def _enforce_continuous_for_pg(self, is_pg: bool) -> None:
+        """Set continuous=True when a PG method is active, restore False for DQN."""
+        if is_pg:
+            self.continuous_var.set(True)
+        else:
+            self.continuous_var.set(False)
+
+    def _on_compare_family_changed(self, *_args) -> None:
+        self._enforce_continuous_for_pg(self.compare_family_var.get() == "PG")
+
+    def _on_method_tab_changed(self, _event=None) -> None:
+        name = self._selected_method_name()
+        self._enforce_continuous_for_pg(name in self.PG_METHODS)
 
     def _on_apply_reset(self):
         self.compare_var.set(False)
@@ -553,7 +650,15 @@ class WorkbenchUI:
                 )
             elif self.compare_var.get():
                 created = []
-                for method_name in self.method_vars.keys():
+                methods = self.DQN_METHODS if self.compare_family_var.get() == "DQN" else self.PG_METHODS
+                if self.compare_family_var.get() == "PG" and not bool(env_kwargs.get("continuous", False)):
+                    methods = [name for name in methods if name != "SAC"]
+                    messagebox.showwarning(
+                        "SAC skipped",
+                        "SAC benötigt einen kontinuierlichen Action-Space und wird bei continuous=False übersprungen.",
+                    )
+
+                for method_name in methods:
                     created.append(
                         self.manager.add_job(
                             JobConfig(
@@ -731,10 +836,20 @@ class WorkbenchUI:
         if frame is None:
             return
 
-        try:
-            from PIL import Image, ImageTk
-        except ImportError:
+        if not hasattr(self, '_pil_available'):
+            try:
+                from PIL import Image, ImageTk
+                self._pil_available = True
+                self._PIL_Image = Image
+                self._PIL_ImageTk = ImageTk
+            except ImportError:
+                self._pil_available = False
+
+        if not self._pil_available:
             return
+
+        Image = self._PIL_Image
+        ImageTk = self._PIL_ImageTk
 
         frame_h, frame_w = frame.shape[:2]
         box_w = max(1, self.visual_label.winfo_width())
