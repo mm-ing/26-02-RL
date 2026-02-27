@@ -496,6 +496,8 @@ class LunarLanderGUI:
         self._policy_trainers.clear()
         self._selected_render_trainer = self.trainer
         self._apply_snapshot_to_trainer(snap)
+        if not single_episode:
+            self.trainer.reset_policy_agent(str(snap["policy"]))
 
         self._stop_requested.clear()
         self._pause_requested.clear()
@@ -558,6 +560,7 @@ class LunarLanderGUI:
                 )
 
             self._set_policy_defaults_on_trainer(trainer, policy)
+            trainer.reset_policy_agent(policy)
             cfg = trainer.get_policy_config(policy)
             self._compare_run_meta[policy] = {
                 "eps_max": float(snap["epsilon_max"]),
@@ -1006,23 +1009,28 @@ class LunarLanderGUI:
                 ma_line, = self.ax.plot(x, ma, alpha=1.0, linewidth=2.2, color=reward_line.get_color(), label=f"{base} | MA")
                 lines.extend([reward_line, ma_line])
 
-        legend = self.ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
-        if legend:
-            legend.get_frame().set_facecolor("#2d2d30")
-            legend.get_frame().set_edgecolor("#4f5358")
-            legend.get_frame().set_alpha(0.9)
-            for leg_handle, line in zip(legend.legend_handles, lines):
-                leg_handle.set_picker(5)
-                leg_handle.set_alpha(1.0)
-                self._legend_map[leg_handle] = line
-                line.set_gid(id(line))
+        if lines:
+            legend = self.ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.0)
+            if legend:
+                legend.get_frame().set_facecolor("#2d2d30")
+                legend.get_frame().set_edgecolor("#4f5358")
+                legend.get_frame().set_alpha(0.9)
+                for leg_handle, line in zip(legend.legend_handles, lines):
+                    leg_handle.set_picker(5)
+                    leg_handle.set_alpha(1.0)
+                    self._legend_map[leg_handle] = line
+                    line.set_gid(id(line))
 
-            for leg_text in legend.get_texts():
-                leg_text.set_picker(True)
-                leg_text.set_alpha(1.0)
-                leg_text.set_color("#d4d4d4")
-            for leg_text, line in zip(legend.get_texts(), lines):
-                self._legend_map[leg_text] = line
+                for leg_text in legend.get_texts():
+                    leg_text.set_picker(True)
+                    leg_text.set_alpha(1.0)
+                    leg_text.set_color("#d4d4d4")
+                for leg_text, line in zip(legend.get_texts(), lines):
+                    self._legend_map[leg_text] = line
+        else:
+            existing = self.ax.get_legend()
+            if existing:
+                existing.remove()
 
         self.plot_canvas.draw_idle()
 

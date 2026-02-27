@@ -54,7 +54,6 @@ Set up a general reinforcement learning project including the project structure,
         - this group is placed between `Environment` and `General`
         - when `compare on` is activated, `animation on` is automatically set to `off`; user may manually set it to `on` afterwards
       - `General`
-        - policiy dropdown menu (input values change depending on chosen policy) 
         - parameter inputs:
           - `max steps` (default 1000)
           - `episodes` (default 5000)
@@ -63,16 +62,19 @@ Set up a general reinforcement learning project including the project structure,
           - `epsilon min` (when applicable)
         - changing the selected policy applies policy-specific default values to relevant general/specific fields.
       - `Specific` (specific parameters for chosen policy)
+        - policiy dropdown menu (input values change depending on chosen policy) 
         - parameter inputs:
-          - `gamma` (when applicable, default 0.99)
+          - `hidden layer size` (when applicable, default 128; accepts comma-separated lists such as `256,256`)
+          - `activation function` (when applicable, dropdown, default `ReLU`; options: `ReLU`, `Tanh`, `LeakyReLU`, `ELU`)
           - `learning rate`(when applicable, default 0.001)
+          - `gamma` (when applicable, default 0.99)
+          - `learning rate decay`(when applicable, default 0.995)
+          - `learning rate decay method`(when applicable, dropdown, default `per step`)
           - `replay size` (when applicable, default 50000)
           - `batch size`(when applicable, default 64)
           - `target update` (when applicable, default 100)
           - `replay warmup` (when applicable, default 1000)
           - `learning cadence` (when applicable, default 2)
-          - `activation function` (dropdown, default `ReLU`; options: `ReLU`, `Tanh`, `LeakyReLU`, `ELU`)
-          - `hidden layer size(s)` (when applicable, default 128; accepts comma-separated lists such as `256,256`)
       - `Live Plot`
         - parameter inputs:
           - `moving average values` (default 20)
@@ -94,6 +96,8 @@ Set up a general reinforcement learning project including the project structure,
       - `Save Plot PNG`
     - Buttons should expand horizontally in their cells (sticky='ew').
     - Additional buttons may be defined in the second markdown file.
+    - each `Train and Run` starts from a freshly initialized network for each trained policy (new weights; no carry-over from prior runs).
+    - `Reset All` must not trigger matplotlib `UserWarning` messages when no labeled plot lines exist (e.g., empty legend state).
   - `Current Run` (full width, below Controls, arrange top to bottom): 
     - progress bar for steps (filling left to right), labeled `Steps`, label left
     - progress bar for episodes (filling left to right), labeled `Episodes`, label left
@@ -110,7 +114,7 @@ Set up a general reinforcement learning project including the project structure,
       - line style: live reward thin line, slightly transparent; moving average bold line
       - each `Train and Run` appends a new run (reward + moving average); previous runs remain visible until `Clear Plot`
     - add legend outside right of the plot
-    - legend base label format must be: `<policy> | eps(<epsilon max>/<epsilon min>) | lr=<learning rate>`
+    - legend base label format must be: `<policy> | eps(<epsilon max>/<epsilon decay>/<epsilon min>) | lr=<learning rate>`
     - each run contributes exactly two legend entries: `<base label> | reward` and `<base label> | MA`
     - legend entries must be interactive toggles (click legend label text or legend line/marker to show or hide corresponding plot line)
     - in compare mode, legend entries should be visible during active training (not only after run finalization)

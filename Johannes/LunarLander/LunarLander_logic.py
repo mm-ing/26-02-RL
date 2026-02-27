@@ -391,6 +391,9 @@ class Trainer:
             self.agents[policy] = cls(self.env.state_dim, self.env.action_dim, config)
         return self.agents[policy]
 
+    def reset_policy_agent(self, policy: str) -> None:
+        self.agents.pop(policy, None)
+
     def rebuild_environment(self, gravity: float, enable_wind: bool, wind_power: float, turbulence_power: float) -> None:
         self.env.update_config(gravity, enable_wind, wind_power, turbulence_power)
         self.agents.clear()

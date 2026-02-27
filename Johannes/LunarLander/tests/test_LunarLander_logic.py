@@ -87,6 +87,16 @@ def test_learning_updates_progress(trainer):
     assert after >= before
 
 
+def test_reset_policy_agent_reinitializes_network(trainer):
+    policy = "DuelingDQN"
+    _configure_fast_learning(trainer, policy)
+    trainer.run_episode(policy=policy, epsilon=0.2, max_steps=5)
+    first_agent = trainer._get_or_create_agent(policy)
+    trainer.reset_policy_agent(policy)
+    second_agent = trainer._get_or_create_agent(policy)
+    assert first_agent is not second_agent
+
+
 def test_train_and_csv_export(tmp_path, trainer):
     policy = "D3QN"
     _configure_fast_learning(trainer, policy)
