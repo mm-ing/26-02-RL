@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import inspect
+import math
 import queue
 import threading
 import time
@@ -14,8 +15,13 @@ from typing import Any, Callable, Deque, Dict, List, Optional
 
 import gymnasium as gym
 import numpy as np
-from stable_baselines3 import DQN
+from stable_baselines3 import A2C, DQN, PPO, SAC
 from stable_baselines3.common.monitor import Monitor
+
+try:
+    from sb3_contrib import TRPO  # type: ignore
+except Exception:
+    TRPO = None
 
 
 class InitialStateWrapper(gym.Wrapper):
@@ -91,6 +97,7 @@ class NetworkConfig:
 class AlgorithmConfig:
     algorithm: str = "D3QN"
     learning_rate: float = 5e-4
+    lr_algorithm: str = "Constant"
     gamma: float = 0.99
     buffer_size: int = 100_000
     batch_size: int = 128
@@ -109,6 +116,7 @@ class EpisodeConfig:
     episodes: int = 3000
     max_steps: int = 1000
     moving_average_window: int = 20
+    eval_interval: int = 5
 
 
 @dataclass
@@ -266,6 +274,26 @@ def _safe_make_env(env_id: str, render_mode: Optional[str], env_kwargs: Optional
     return _build_env(env_id, render_mode=render_mode, env_kwargs=env_kwargs)
 
 
+def _build_learning_rate(algorithm: str, alpha: float):
+    name = algorithm.strip().lower().replace("_", " ").replace("-", " ")
+
+    if name in {"linear", "linear decay"}:
+        return lambda progress_remaining: max(alpha * float(progress_remaining), 1e-8)
+
+    if name in {"exponential", "exponential decay", "exp", "exp decay"}:
+        return lambda progress_remaining: max(alpha * math.exp(-4.0 * (1.0 - float(progress_remaining))), 1e-8)
+
+    if name in {"step", "step decay"}:
+        def step_decay(progress_remaining: float) -> float:
+            completed = max(0.0, min(1.0, 1.0 - float(progress_remaining)))
+            stage = int(completed * 4)
+            return max(alpha * (0.5 ** stage), 1e-8)
+
+        return step_decay
+
+    return float(alpha)
+
+
 class SB3DQNAlgorithm(AlgorithmBase):
     def __init__(
         self,
@@ -275,32 +303,97 @@ class SB3DQNAlgorithm(AlgorithmBase):
         env_kwargs: Optional[Dict[str, Any]] = None,
     ):
         self.config = config
-        self.train_env = Monitor(_safe_make_env(env_id, render_mode=render_mode, env_kwargs=env_kwargs))
+        self.train_env = Monitor(_safe_make_env(env_id, render_mode=None, env_kwargs=env_kwargs))
         self.eval_env = _safe_make_env(env_id, render_mode=render_mode, env_kwargs=env_kwargs)
+        self.model_class: Any = DQN
 
         policy_kwargs = {
             "net_arch": config.net.hidden_layers,
             "activation_fn": _activation_name_to_class(config.net.activation),
         }
+        lr_value = _build_learning_rate(config.lr_algorithm, config.learning_rate)
+        algo_name = config.algorithm.strip().lower()
 
-        self.model = DQN(
-            policy="MlpPolicy",
-            env=self.train_env,
-            learning_rate=config.learning_rate,
-            gamma=config.gamma,
-            buffer_size=config.buffer_size,
-            batch_size=config.batch_size,
-            learning_starts=config.learning_starts,
-            train_freq=config.train_freq,
-            gradient_steps=config.gradient_steps,
-            target_update_interval=config.target_update_interval,
-            exploration_fraction=config.exploration_fraction,
-            exploration_initial_eps=config.exploration_initial_eps,
-            exploration_final_eps=config.exploration_final_eps,
-            policy_kwargs=policy_kwargs,
-            verbose=0,
-            device="auto",
-        )
+        if algo_name == "ppo":
+            self.model_class = PPO
+            self.model = PPO(
+                policy="MlpPolicy",
+                env=self.train_env,
+                learning_rate=lr_value,
+                gamma=config.gamma,
+                n_steps=max(16, int(config.train_freq)),
+                batch_size=max(16, int(config.batch_size)),
+                policy_kwargs=policy_kwargs,
+                verbose=0,
+                device="auto",
+            )
+        elif algo_name == "a2c":
+            self.model_class = A2C
+            self.model = A2C(
+                policy="MlpPolicy",
+                env=self.train_env,
+                learning_rate=lr_value,
+                gamma=config.gamma,
+                n_steps=max(5, int(config.train_freq)),
+                policy_kwargs=policy_kwargs,
+                verbose=0,
+                device="auto",
+            )
+        elif algo_name == "trpo":
+            if TRPO is None:
+                raise ImportError("TRPO benötigt das Paket 'sb3-contrib'. Bitte installieren: pip install sb3-contrib")
+            self.model_class = TRPO
+            self.model = TRPO(
+                policy="MlpPolicy",
+                env=self.train_env,
+                learning_rate=lr_value,
+                gamma=config.gamma,
+                n_steps=max(16, int(config.train_freq)),
+                batch_size=max(16, int(config.batch_size)),
+                policy_kwargs=policy_kwargs,
+                verbose=0,
+                device="auto",
+            )
+        elif algo_name == "sac":
+            self.model_class = SAC
+            self.model = SAC(
+                policy="MlpPolicy",
+                env=self.train_env,
+                learning_rate=lr_value,
+                gamma=config.gamma,
+                buffer_size=config.buffer_size,
+                batch_size=config.batch_size,
+                learning_starts=config.learning_starts,
+                train_freq=max(1, int(config.train_freq)),
+                gradient_steps=max(1, int(config.gradient_steps)),
+                target_update_interval=max(1, int(config.target_update_interval)),
+                policy_kwargs=policy_kwargs,
+                verbose=0,
+                device="auto",
+            )
+        else:
+            self.model_class = DQN
+            self.model = DQN(
+                policy="MlpPolicy",
+                env=self.train_env,
+                learning_rate=lr_value,
+                gamma=config.gamma,
+                buffer_size=config.buffer_size,
+                batch_size=config.batch_size,
+                learning_starts=config.learning_starts,
+                train_freq=config.train_freq,
+                gradient_steps=config.gradient_steps,
+                target_update_interval=config.target_update_interval,
+                exploration_fraction=config.exploration_fraction,
+                exploration_initial_eps=config.exploration_initial_eps,
+                exploration_final_eps=config.exploration_final_eps,
+                policy_kwargs=policy_kwargs,
+                verbose=0,
+                device="auto",
+            )
+
+    def current_epsilon(self) -> float:
+        return float(getattr(self.model, "exploration_rate", float("nan")))
 
     def select_action(self, state: np.ndarray, explore: bool = True) -> int:
         action, _ = self.model.predict(state, deterministic=not explore)
@@ -309,7 +402,7 @@ class SB3DQNAlgorithm(AlgorithmBase):
     def update(self, batch: Dict[str, Any]) -> Dict[str, float]:
         total_timesteps = int(batch.get("total_timesteps", 1))
         self.model.learn(total_timesteps=total_timesteps, reset_num_timesteps=False, progress_bar=False)
-        return {"loss": float("nan"), "epsilon": float(self.model.exploration_rate)}
+        return {"loss": float("nan"), "epsilon": self.current_epsilon()}
 
     def evaluate_episode(
         self,
@@ -322,24 +415,37 @@ class SB3DQNAlgorithm(AlgorithmBase):
         steps = 0
         last_frame = None
 
-        if render:
-            last_frame = self.eval_env.render()
-            if on_frame and last_frame is not None:
-                on_frame(last_frame)
-
         for _ in range(max_steps):
             action, _ = self.model.predict(state, deterministic=True)
             state, reward, terminated, truncated, _ = self.eval_env.step(action)
             total_reward += float(reward)
             steps += 1
-            if render:
-                last_frame = self.eval_env.render()
-                if on_frame and last_frame is not None:
-                    on_frame(last_frame)
             if terminated or truncated:
                 break
 
+        if render:
+            last_frame = self.eval_env.render()
+            if on_frame and last_frame is not None:
+                on_frame(last_frame)
+
         return {"return": total_reward, "steps": steps, "frame": last_frame}
+
+    def quick_evaluate(self, max_steps: int) -> Dict[str, Any]:
+        """Fast evaluation without rendering — used on non-eval episodes."""
+        ep_rewards = list(self.train_env.get_episode_rewards())
+        if ep_rewards:
+            return {"return": ep_rewards[-1], "steps": 0, "frame": None}
+        state, _ = self.eval_env.reset()
+        total_reward = 0.0
+        steps = 0
+        for _ in range(max_steps):
+            action, _ = self.model.predict(state, deterministic=True)
+            state, reward, terminated, truncated, _ = self.eval_env.step(action)
+            total_reward += float(reward)
+            steps += 1
+            if terminated or truncated:
+                break
+        return {"return": total_reward, "steps": steps, "frame": None}
 
     def get_state_dict(self) -> Dict[str, Any]:
         path = Path(f"_tmp_{uuid.uuid4().hex}.zip")
@@ -352,7 +458,7 @@ class SB3DQNAlgorithm(AlgorithmBase):
         raw = bytes.fromhex(state["zip_bytes"])
         path = Path(f"_tmp_{uuid.uuid4().hex}.zip")
         path.write_bytes(raw)
-        loaded = DQN.load(path, env=self.train_env, device="auto")
+        loaded = self.model_class.load(path, env=self.train_env, device="auto")
         self.model = loaded
         path.unlink(missing_ok=True)
 
@@ -360,7 +466,7 @@ class SB3DQNAlgorithm(AlgorithmBase):
         self.model.save(path)
 
     def load(self, path: Path) -> None:
-        self.model = DQN.load(path, env=self.train_env, device="auto")
+        self.model = self.model_class.load(path, env=self.train_env, device="auto")
 
     def close(self) -> None:
         self.train_env.close()
@@ -401,14 +507,20 @@ class TrainLoop:
     def run_episode(self, episode_index: int, history: List[float]) -> EpisodeResult:
         start = time.perf_counter()
         self.algorithm.update({"total_timesteps": self.episode_cfg.max_steps})
-        evaluation = self.algorithm.evaluate_episode(
-            self.episode_cfg.max_steps,
-            render=True,
-            on_frame=self._set_latest_frame,
-        )
 
-        with self._frame_lock:
-            self._latest_frame = evaluation["frame"]
+        eval_iv = max(1, self.episode_cfg.eval_interval)
+        is_eval_ep = (episode_index % eval_iv == 0) or (episode_index <= 1)
+
+        if is_eval_ep:
+            evaluation = self.algorithm.evaluate_episode(
+                self.episode_cfg.max_steps,
+                render=True,
+                on_frame=self._set_latest_frame,
+            )
+            with self._frame_lock:
+                self._latest_frame = evaluation["frame"]
+        else:
+            evaluation = self.algorithm.quick_evaluate(self.episode_cfg.max_steps)
 
         total_reward = float(evaluation["return"])
         history.append(total_reward)
@@ -549,6 +661,7 @@ class TrainingManager:
         return AlgorithmConfig(
             algorithm=cfg.algorithm,
             learning_rate=cfg.learning_rate,
+            lr_algorithm=cfg.lr_algorithm,
             gamma=cfg.gamma,
             buffer_size=cfg.buffer_size,
             batch_size=cfg.batch_size,
@@ -719,7 +832,7 @@ class TrainingManager:
         job.returns.append(result.total_reward)
         job.moving_avg.append(result.moving_avg)
         algo = self.algorithms[job_id]
-        job.epsilon = float(algo.model.exploration_rate)
+        job.epsilon = algo.current_epsilon()
 
         self.event_bus.publish(
             "EpisodeCompleted",

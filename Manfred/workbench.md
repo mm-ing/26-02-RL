@@ -133,7 +133,7 @@
     - Textfeld: 
 - Episode Configuration
     - Checkbox: `Compare Methods` (Lässt alle Algorithmen parallel trainieren)
-    - Allgemeine RL-Parameter: Episodes (!!!default 3000), Max-Steps, Alpha, Gamma
+    - Allgemeine RL-Parameter: Episodes (!!!default 3000), Max-Steps, Dropdown zur Auswahl von gängigen Learning-Rate-Algorithmen, Alpha, Gamma
     - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: 2x ein Label gefolgt einem Textfeld (Episodes, Max-Steps), (Alpha, Gamma)...
 - Parameter Tuning
     - Checkbox: `Enable Tuning` (Lässt ausgewählte Methode mit allen Einstellungen zwischen Min und Max mit dem Inkrement Step parallel trainieren)
@@ -144,7 +144,8 @@
     - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: 2x ein Label gefolgt einem Textfeld
 - Methoden **Tab-Control** (für spezifische RL-Methodenparameter)
     - **Tab-Header** für die Konfiguration jeder gewählten RL-Methode
-    - **Tab-Content-Panel** für methodenspezifische RL-Parameter wie z.B: Buffer-Size, Batch-Size,  Learning-Starts, Train-Frequency, Gradient-Step, Target-Update, Initial-Epsilon, Exploration-Fraction, Final-Epsilon, Activation - !!!außer Episodes, Max-Steps, Alpha, Gamma (!!!stehen schon im Panel `Episode Configuration`)
+    - **Tab-Content-Panel** für methodenspezifische RL-Parameter wie z.B: Buffer-Size, Batch-Size,  Learning-Starts, Train-Frequency, Gradient-Step, Target-Update, Dropdown zur Auswahl von gängigen Exploration/Exploitation Algorithmen - alternativ Epsion-Max, Epsilon-Min, Epsilon-Decay, Activation 
+    - !!!außer Episodes, Max-Steps, Alpha, Gamma (!!!stehen schon im Panel `Episode Configuration`)
     - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: 2x ein Label gefolgt einem Textfeld 
 - Button: `Apply and Reset` für alle Konfigurationen !!!auch für die Checkboxen `Compare Methods` und `Enable Tuning`
 
@@ -243,8 +244,6 @@
 - Wenn es mehrere aktive TrainingJobs gibt, soll die Visualisierung im Hauptfenster immer das Environment des laufenden Algorithmus anzeigen, der im „Training Status“-Fenster aktuell selektiert ist (sofern eine Auswahl vorliegt).
 - Wenn keine Auswahl vorliegt, soll der erste laufende Job visualisiert werden.
 - Thread-sichere UI-Updates beibehalten.
-       
-
 
 ### Training-Status-Fenster: Tabellen-Spezifikation
 - **Verwende ein modernes Tabellen-Widget** (z. B. `ttk.Treeview`) — keine individuellen Label-/Button-Zeilen pro TrainingJob. Tabelle muss performant scrollen und Spalten anpassen.
@@ -262,6 +261,9 @@
 - **Persistenz (optional):** Auswahl (Visible/Paused) bleibt erhalten, wenn das Fenster geschlossen und wieder geöffnet wird (lokaler State-Cache im App-State).
 
 Diese Regeln sind verpflichtend für die Implementierung des Training-Status-Fensters.
+
+## Performance
+- Nach Implementierung der einzelnen Lern-Methoden, bitte mehrere Optimierungs-Runden einbauen zur Beschleunigung der Algorithmen
 
 ## Tests
 - Schreibe Unit-Tests für die implementierten Methoden
