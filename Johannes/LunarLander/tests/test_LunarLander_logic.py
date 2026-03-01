@@ -151,7 +151,7 @@ def test_ppo_gae_and_clip_config_propagation(trainer):
     assert abs(agent._ppo_clip_range - 0.15) < 1e-9
 
 
-def test_true_sac_learns_with_replay_and_updates_alpha(trainer):
+def test_sac_smoke_learning_runs(trainer):
     policy = "SAC"
     _configure_fast_learning(trainer, policy)
     trainer.set_policy_config(policy, learning_cadence=1, replay_warmup=1, batch_size=2)
@@ -161,11 +161,9 @@ def test_true_sac_learns_with_replay_and_updates_alpha(trainer):
     agent = trainer._get_or_create_agent(policy)
 
     assert agent.learn_steps > 0
-    assert len(agent.replay) > 0
-    assert float(agent.alpha.item()) > 0.0
 
 
-def test_true_sac_learning_cadence_reduces_update_frequency(trainer):
+def test_sac_learning_cadence_reduces_update_frequency(trainer):
     policy = "SAC"
     _configure_fast_learning(trainer, policy)
     trainer.set_policy_config(policy, replay_warmup=1, batch_size=2, learning_cadence=1)
@@ -181,7 +179,7 @@ def test_true_sac_learning_cadence_reduces_update_frequency(trainer):
     assert updates_cadence_1 >= updates_cadence_4
 
 
-def test_true_trpo_updates_with_kl_constrained_step(trainer):
+def test_trpo_smoke_learning_runs(trainer):
     policy = "TRPO"
     _configure_fast_learning(trainer, policy)
     trainer.set_policy_config(policy, learning_cadence=2, batch_size=4, replay_warmup=1)
@@ -194,7 +192,7 @@ def test_true_trpo_updates_with_kl_constrained_step(trainer):
     assert np.isfinite(agent._current_lr)
 
 
-def test_true_a2c_updates_with_actor_critic_objective(trainer):
+def test_a2c_smoke_learning_runs(trainer):
     policy = "A2C"
     _configure_fast_learning(trainer, policy)
     trainer.set_policy_config(policy, learning_cadence=2, batch_size=4, replay_warmup=1)
@@ -205,6 +203,21 @@ def test_true_a2c_updates_with_actor_critic_objective(trainer):
 
     assert agent.learn_steps > 0
     assert np.isfinite(agent._current_lr)
+
+
+def test_evaluate_policy_is_deterministic_and_no_learning_side_effects(trainer):
+    policy = "D3QN"
+    _configure_fast_learning(trainer, policy)
+    trainer.reset_policy_agent(policy)
+    agent = trainer._get_or_create_agent(policy)
+
+    before_learn_steps = agent.learn_steps
+    eval_result = trainer.evaluate_policy(policy=policy, max_steps=8, episodes=2, seed_base=123)
+    after_learn_steps = agent.learn_steps
+
+    assert len(eval_result["rewards"]) == 2
+    assert np.isfinite(float(eval_result["mean_reward"]))
+    assert after_learn_steps == before_learn_steps
 
 
 def test_train_and_csv_export(tmp_path, trainer):

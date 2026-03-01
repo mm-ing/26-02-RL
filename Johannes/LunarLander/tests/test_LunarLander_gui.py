@@ -1,4 +1,5 @@
 from LunarLander_gui import LunarLanderGUI
+from LunarLander_logic import POLICY_DEFAULTS
 
 
 class _DummyVar:
@@ -160,3 +161,53 @@ def test_compare_param_parsing_and_combo_generation():
     learning_rates = sorted({cfg["learning_rate"] for cfg in configs})
     assert policies == ["A2C", "PPO"]
     assert learning_rates == [1e-4, 1e-3]
+
+
+def test_compare_policy_uses_policy_defaults_for_non_compared_fields():
+    gui = LunarLanderGUI.__new__(LunarLanderGUI)
+    gui._format_legend_number = lambda value: f"{float(value):.6f}".rstrip("0").rstrip(".")
+    gui.compare_param_var = _DummyGetVar("Policy")
+    gui.compare_values_var = _DummyGetVar("PPO, A2C")
+    gui.compare_summary_var = _DummyVar()
+    gui._compare_param_lists = {}
+    gui._compare_raw_lists = {}
+
+    snap = {
+        "policy": "PPO",
+        "max_steps": 100,
+        "episodes": 10,
+        "epsilon_max": 1.0,
+        "epsilon_decay": 0.99,
+        "epsilon_min": 0.05,
+        "gamma": 0.99,
+        "learning_rate": 1e-4,
+        "replay_size": 1000,
+        "batch_size": 32,
+        "target_update": 10,
+        "replay_warmup": 10,
+        "learning_cadence": 1,
+        "activation_function": "ReLU",
+        "hidden_layers": "128",
+        "lr_strategy": "linear",
+        "lr_decay": 0.3,
+        "min_learning_rate": 1e-5,
+        "gae_lambda": 0.95,
+        "ppo_clip_range": 0.2,
+        "moving_avg": 20,
+        "continous": True,
+        "gravity": -10.0,
+        "enable_wind": False,
+        "wind_power": 15.0,
+        "turbulence_power": 1.5,
+    }
+
+    gui.compare_values_var = _DummyGetVar("PPO, A2C")
+    gui.compare_param_var = _DummyGetVar("Policy")
+    gui._compare_param_lists = {"Policy": ["PPO", "A2C"]}
+
+    configs = LunarLanderGUI._build_compare_run_configs(gui, snap)
+    by_policy = {cfg["policy"]: cfg for cfg in configs}
+
+    assert by_policy["PPO"]["lr_strategy"] == POLICY_DEFAULTS["PPO"].lr_strategy
+    assert by_policy["A2C"]["lr_strategy"] == POLICY_DEFAULTS["A2C"].lr_strategy
+    assert by_policy["A2C"]["learning_cadence"] == POLICY_DEFAULTS["A2C"].learning_cadence
