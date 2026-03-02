@@ -1,0 +1,8 @@
+stable-baselines3
+sb3-contrib
+torch
+gymnasium[box2d]
+matplotlib
+pillow
+numpy
+pytest

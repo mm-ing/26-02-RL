@@ -109,6 +109,10 @@ Preferred threading bridge:
 - Maintain per-policy default config snapshots.
 - Reinitialize policy weights for each new `Train and Run` launch.
 - Keep deterministic evaluation separate from exploration training episodes.
+- Tune per-policy defaults for the target environment (do not reuse one-size-fits-all defaults).
+- Keep on-policy settings internally consistent (for example `PPO`: use `n_steps >= batch_size` and prefer `batch_size` divisibility to avoid truncated mini-batch warnings).
+- For off-policy defaults (`SAC`/`TD3`), use realistic replay warmup and buffer sizes (larger buffer + sufficient `learning_starts`) to improve early training stability.
+- Runtime device is fixed to `CPU` for all exposed policies.
 
 Typical mapping (if used):
 - DQN-like labels -> SB3 `DQN`
@@ -137,6 +141,7 @@ Top row column ratio:
 
 ### Parameters panel
 - scrollable content region
+- parameter groups must expand to full available parameters-panel width (no fixed narrow content width)
 - groups in this order:
   1. `Environment`
   2. `Compare`
@@ -189,6 +194,9 @@ Notes:
 
 #### Live Plot group fields
 - `Moving average values` (default: `20`)
+- `Show Advanced` toggle (default: `False`)
+- when advanced section is shown: `Rollout full-capture steps` (default: `120`)
+- when advanced section is shown: `Low-overhead animation` (default: `False`)
 
 ### Controls row
 Exactly 8 equal-width buttons (left to right):
@@ -199,11 +207,17 @@ Exactly 8 equal-width buttons (left to right):
 5. `Clear Plot`
 6. `Save samplings CSV`
 7. `Save Plot PNG`
-8. `Current device: CPU/GPU`
+8. `Current device: CPU`
+
+Control highlight behavior:
+- `Train and Run` highlight style is shown only while a training run is active
+- `Pause/Run` highlight style is shown only while paused/activated
+- inactive state uses neutral/default button styling
 
 ### Current Run panel
 - Steps progress bar
 - Episodes progress bar
+- steps progress semantics: advances only during replay animation playback (0→100 across playback frames), not from raw episode environment step count
 - status line format:
   - `Epsilon: <...> | LR: <...> | Best reward: <...> | Render: <off|on|skipped|idle>`
 
@@ -212,7 +226,10 @@ Exactly 8 equal-width buttons (left to right):
 - plot reward and moving average with same color
 - eval checkpoints as separate style (`eval`)
 - legend outside right side
+- legend labels grouped per run: full parameter info shown once (reward line), with compact `MA` / `eval` entries
+- wrap long legend base labels across two lines to reduce right-side clipping
 - interactive legend toggling (text and handle clickable)
+- keep plot area left-aligned and reserve a fixed right gutter for legend
 - preserve previous runs until `Clear Plot`
 
 ---
@@ -222,25 +239,38 @@ Exactly 8 equal-width buttons (left to right):
 - Tk widgets updated only in main thread
 - worker threads write pending state only (thread-safe)
 - periodic UI pump consumes pending updates
+- before starting a new run, flush/consume queued worker events so pending finalize data is not lost
+- starting a new run after `Pause` must preserve already finished run curves in live plot history
 - render tick in main thread at configured FPS
 - no worker-side GUI drawing
 - throttled plot updates
-- compare mode supports multiple runs with bounded parallelism
+- compare mode supports multiple runs with bounded parallelism (max concurrent compare workers: `4`)
 - latest-frame-wins rendering: do not queue all frames; always display newest available frame
+- for visual update episodes, capture bounded per-step rollout frames and play them in GUI while training continues in background
+- when `Low-overhead animation` is enabled, use reduced rollout frame budget, capped short full-capture threshold, and frame downsampling for lower rendering overhead
+- short episodes should capture every step frame up to `Rollout full-capture steps`
+- longer episodes should use adaptive stride sampling after that threshold (bounded frame budget)
+- redraw render canvas only when a newer frame exists or when resize requires re-fit (avoid unconditional redraw every tick)
+- reuse/update existing canvas image item for frames instead of deleting/recreating canvas content each tick
 - optional fast non-render evaluation path for non-visual episodes/checkpoints
 - debounce resize-heavy UI updates (~100 ms) and avoid full relayout per configure event
 - avoid repeated expensive redraws when state/visibility did not change
+- default/runtime device should be fixed to `CPU` for all policies
+- see `Recent updates` (`2026-03-02`) for the runtime hotfix where `Animation on = False` must stop active replay immediately
 
 ### Update-rate behavior
 Use `Update rate (episodes)` as gating interval:
 - reward data stored every episode internally
 - animation updates on every Nth episode (and final episode)
-- live plot refresh on every Nth episode (and final episode)
+- live plot refresh on every episode (decoupled from update-rate gating)
+- when animation updates are due, prefer bounded per-step rollout playback (sampled if needed for performance) instead of a single terminal frame
+- for short episodes, avoid frame skipping before the full-capture threshold
 
 ---
 
 ## Compare mode behavior
 - each combination is one run
+- execute compare combinations with bounded parallel training (max `4` concurrent runs)
 - no duplicate finalize lines
 - immutable per-run metadata for labels
 - selected policy determines which compare run drives render/status/progress when available
@@ -249,6 +279,7 @@ Use `Update rate (episodes)` as gating interval:
 
 ## Styling baseline (dark mode)
 - theme preference: `clam`, fallback `vista`
+- visual/layout parity target: match the LunarLander GUI style profile unless File B overrides it
 - palette:
   - main bg `#1e1e1e`
   - panel bg `#252526`
@@ -256,8 +287,28 @@ Use `Update rate (episodes)` as gating interval:
   - text `#e6e6e6`
   - muted `#d0d0d0`
   - accent `#0e639c`
-- keep consistent spacing tokens
+- fonts:
+  - default: `Segoe UI`, size `10`
+  - group headings: `Segoe UI`, size `10`, bold
+  - control buttons: `Segoe UI`, size `10`, bold
+- keep consistent spacing tokens (recommended defaults):
+  - outer pad `10`
+  - inner pad `6`
+  - tight pad `4`
+  - label column min width `~92`
+  - parameter input width `~9`
 - preserve equal-width control buttons
+- button styling baseline:
+  - default dark button style for neutral actions
+  - accent style for active `Train and Run`
+  - amber style for active `Pause/Run`
+- parameter panel baseline:
+  - content fills full available panel width
+  - avoid fixed/narrow canvas width constraints
+- plot styling baseline:
+  - subtle grid enabled
+  - spine tint/alpha aligned with dark theme
+  - subplot margins reserve right legend gutter (`left~0.07`, `right~0.78`)
 
 ---
 
@@ -273,10 +324,20 @@ Use `Update rate (episodes)` as gating interval:
 - GUI smoke tests: startup, clear/reset safety, plotting/legend interactions, compare finalization consistency
 - run with `pytest`
 
+Test execution isolation (required in multi-project workspaces):
+- add local `pytest.ini` per project with `testpaths = tests`
+- prefer isolated invocation: `python -m pytest -q --rootdir . --confcutdir . tests/...`
+- avoid relying on workspace-root auto-discovery when sibling projects contain tests
+- optional: include a local `run_tests.py` helper that runs the isolated command
+
 Testing robustness rules:
 - if Box2D/LunarLander is unavailable on a machine, skip affected tests with explicit reason instead of hard-failing whole suite
+- if Tk/Tcl runtime assets are unavailable (for example missing `init.tcl`), GUI tests must `skip` with explicit reason instead of failing
+- for GUI tests, guard both import-time and root-creation-time failures (`tk.Tk()`) before running assertions
 - include at least one headless smoke path for training loop + event propagation
 - verify pause/resume/cancel transitions and final status reporting for worker jobs
+- include regression coverage for `Pause -> Train and Run` ensuring old finalized runs remain in plot history
+- ensure `run_episode` reports actual executed environment steps even when transition collection is disabled
 
 ---
 
@@ -299,3 +360,12 @@ If File B provides only:
 - `use SB3`
 
 then this file must still be sufficient to regenerate a functionally equivalent project structure, behavior, and GUI.
+
+---
+
+## Recent updates
+
+### 2026-03-02
+- update-id: `BW-ANIM-TOGGLE-RUNTIME-HOTFIX`
+- fixed runtime behavior: setting `Animation on = False` must stop replay animation immediately for active runs (clear queued playback frames, reset replay progress, and propagate runtime animation settings to active trainer)
+- added GUI regression coverage for this hotfix: toggle animation off clears replay queue/state and updates status render state to `off`

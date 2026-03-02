@@ -1,4 +1,7 @@
-from LunarLander_gui import LunarLanderGUI
+import queue
+import threading
+
+from LunarLander_gui import LunarLanderGUI, _UiEventType, _WorkerUiEvent
 from LunarLander_logic import POLICY_DEFAULTS
 
 
@@ -23,6 +26,11 @@ class _DummyButton:
         return None
 
 
+class _DummyProgressbar:
+    def configure(self, **kwargs):
+        return None
+
+
 def test_consume_pending_keeps_run_meta_immutable_for_preview_and_finalize():
     gui = LunarLanderGUI.__new__(LunarLanderGUI)
 
@@ -38,7 +46,7 @@ def test_consume_pending_keeps_run_meta_immutable_for_preview_and_finalize():
     gui.episodes_progress_var = _DummyVar()
     gui.btn_pause = _DummyButton()
 
-    gui._set_status_text = lambda epsilon, current_x, best_x: None
+    gui._set_status_text = lambda epsilon: None
     gui._update_control_highlights = lambda: None
 
     captured = {}
@@ -121,7 +129,7 @@ def test_finalize_compare_run_uses_policy_meta_not_current_ui_values():
 def test_compare_param_parsing_and_combo_generation():
     gui = LunarLanderGUI.__new__(LunarLanderGUI)
     gui._format_legend_number = lambda value: f"{float(value):.6f}".rstrip("0").rstrip(".")
-    gui.compare_param_var = _DummyGetVar("Learning rate")
+    gui.compare_param_var = _DummyGetVar("LR")
     gui.compare_values_var = _DummyGetVar("1e-4, 1e-3")
     gui.compare_summary_var = _DummyVar()
     gui._compare_param_lists = {"Policy": ["PPO", "A2C"]}
@@ -211,3 +219,223 @@ def test_compare_policy_uses_policy_defaults_for_non_compared_fields():
     assert by_policy["PPO"]["lr_strategy"] == POLICY_DEFAULTS["PPO"].lr_strategy
     assert by_policy["A2C"]["lr_strategy"] == POLICY_DEFAULTS["A2C"].lr_strategy
     assert by_policy["A2C"]["learning_cadence"] == POLICY_DEFAULTS["A2C"].learning_cadence
+
+
+def test_flush_event_queue_consumes_finalize_instead_of_dropping_it():
+    gui = LunarLanderGUI.__new__(LunarLanderGUI)
+    gui._event_queue = queue.Queue()
+
+    captured = {}
+
+    def _capture_single(pending):
+        captured["single"] = dict(pending)
+
+    def _capture_policy(pending_policy):
+        captured["policy"] = dict(pending_policy)
+
+    gui._consume_pending = _capture_single
+    gui._consume_policy_pending = _capture_policy
+
+    run_meta = {"policy": "PPO", "moving_avg": 20}
+    gui._event_queue.put(
+        _WorkerUiEvent(
+            channel="single",
+            event_type=_UiEventType.FINALIZE.value,
+            payload={
+                "finalize_run": True,
+                "rewards_snapshot": [1.0, 2.0, 3.0],
+                "run_meta": run_meta,
+                "finished": True,
+                "epsilon": 0.5,
+            },
+        )
+    )
+
+    LunarLanderGUI._flush_event_queue(gui)
+
+    assert "single" in captured
+    assert captured["single"]["finalize_run"] is True
+    assert captured["single"]["rewards_snapshot"] == [1.0, 2.0, 3.0]
+    assert captured["single"]["run_meta"] == run_meta
+    assert gui._event_queue.empty()
+
+
+def test_start_worker_calls_flush_event_queue_before_new_run():
+    gui = LunarLanderGUI.__new__(LunarLanderGUI)
+
+    called = {"flush": 0}
+
+    gui._flush_event_queue = lambda: called.__setitem__("flush", called["flush"] + 1)
+    gui._snapshot_ui = lambda: {
+        "policy": "PPO",
+        "compare_on": False,
+        "epsilon_max": 1.0,
+        "episodes": 2,
+        "max_steps": 10,
+        "animation_on": False,
+        "moving_avg": 20,
+        "epsilon_min": 0.05,
+        "learning_rate": 1e-4,
+        "lr_strategy": "linear",
+        "lr_decay": 0.3,
+        "min_learning_rate": 1e-5,
+    }
+    gui._enforce_policy_environment_mode = lambda policy, show_info: False
+    gui._start_compare_workers = lambda snap: None
+    gui._close_aux_policy_trainers = lambda: None
+    gui._apply_snapshot_to_trainer = lambda snap: None
+    gui._update_control_highlights = lambda: None
+    gui._set_status_text = lambda epsilon: None
+    gui._worker_loop = lambda snap, single_episode: None
+
+    class _TrainerStub:
+        def set_training_plan(self, policy, episodes, max_steps):
+            return None
+
+        def reset_policy_agent(self, policy):
+            return None
+
+    gui.trainer = _TrainerStub()
+    gui._workers = {}
+    gui._policy_trainers = {}
+    gui._compare_mode_active = False
+    gui._compare_selected_run_key = None
+    gui._selected_render_trainer = gui.trainer
+    gui._latest_eval_snapshot = []
+    gui._single_run_meta = {}
+
+    gui._stop_requested = threading.Event()
+    gui._pause_requested = threading.Event()
+    gui.btn_pause = _DummyButton()
+    gui.steps_bar = _DummyProgressbar()
+    gui.episodes_bar = _DummyProgressbar()
+    gui.steps_progress_var = _DummyVar()
+    gui.episodes_progress_var = _DummyVar()
+
+    gui._ui_lag_last_ms = 0.0
+    gui._ui_lag_max_ms = 0.0
+    gui._last_ui_pump_time = 0.0
+    gui._animate_current_episode = False
+    gui._best_reward = None
+    gui._last_episode_steps = 0
+
+    LunarLanderGUI._start_worker(gui, single_episode=False)
+    gui._worker.join(timeout=1.0)
+
+    assert called["flush"] == 1
+
+
+def test_train_and_run_after_pause_preserves_queued_finalize_plot_run():
+    gui = LunarLanderGUI.__new__(LunarLanderGUI)
+
+    class _TrainerStub:
+        def set_training_plan(self, policy, episodes, max_steps):
+            return None
+
+        def reset_policy_agent(self, policy):
+            return None
+
+    gui.trainer = _TrainerStub()
+    gui._policy_trainers = {}
+    gui._workers = {}
+    gui._worker = None
+
+    gui._event_queue = queue.Queue()
+    gui._event_queue.put(
+        _WorkerUiEvent(
+            channel="single",
+            event_type=_UiEventType.FINALIZE.value,
+            payload={
+                "finalize_run": True,
+                "rewards_snapshot": [10.0, 20.0],
+                "eval_snapshot": [],
+                "finished": True,
+                "epsilon": 0.5,
+                "run_meta": {
+                    "policy": "PPO",
+                    "eps_max": 1.0,
+                    "eps_min": 0.05,
+                    "learning_rate": 1e-4,
+                    "lr_strategy": "linear",
+                    "lr_decay": 0.3,
+                    "min_learning_rate": 1e-5,
+                    "moving_avg": 20,
+                },
+            },
+        )
+    )
+
+    gui._compare_mode_active = False
+    gui._compare_selected_run_key = None
+    gui._latest_compare_rewards = {}
+    gui._latest_compare_eval_snapshots = {}
+    gui._compare_finalized_policies = set()
+    gui._compare_run_meta = {}
+    gui._selected_render_trainer = gui.trainer
+
+    gui._single_run_meta = {}
+    gui._plot_runs = []
+    gui._run_counter = 0
+    gui._latest_rewards_snapshot = None
+    gui._latest_eval_snapshot = []
+    gui._preview_single_lines = None
+    gui._preview_compare_lines = {}
+
+    gui._last_plot_update = 0.0
+    gui._ui_lag_last_ms = 0.0
+    gui._ui_lag_max_ms = 0.0
+    gui._last_ui_pump_time = 0.0
+
+    gui.steps_progress_var = _DummyVar()
+    gui.episodes_progress_var = _DummyVar()
+    gui.steps_bar = _DummyProgressbar()
+    gui.episodes_bar = _DummyProgressbar()
+    gui.btn_pause = _DummyButton()
+    gui.policy_var = _DummyGetVar("PPO")
+    gui.epsilon_max_var = _DummyGetVar(1.0)
+    gui.epsilon_min_var = _DummyGetVar(0.05)
+    gui.learning_rate_var = _DummyGetVar("1.00e-04")
+    gui.lr_strategy_var = _DummyGetVar("linear")
+    gui.lr_decay_var = _DummyGetVar(0.3)
+    gui.min_learning_rate_var = _DummyGetVar("1.00e-05")
+    gui.moving_avg_var = _DummyGetVar(20)
+
+    gui._stop_requested = threading.Event()
+    gui._pause_requested = threading.Event()
+    gui._pause_requested.set()
+
+    state = {"active": True}
+    gui._has_active_workers = lambda: state["active"]
+
+    gui._start_after_worker_stops = lambda single_episode: (state.__setitem__("active", False), LunarLanderGUI._start_worker(gui, single_episode))
+
+    gui._close_aux_policy_trainers = lambda: None
+    gui._apply_snapshot_to_trainer = lambda snap: None
+    gui._enforce_policy_environment_mode = lambda policy, show_info: False
+    gui._update_control_highlights = lambda: None
+    gui._set_status_text = lambda epsilon: None
+    gui._redraw_plot = lambda *args, **kwargs: None
+    gui._update_live_plot = lambda run_meta=None: None
+    gui._consume_policy_pending = lambda pending_policy: None
+    gui._worker_loop = lambda snap, single_episode: None
+
+    gui._snapshot_ui = lambda: {
+        "policy": "PPO",
+        "compare_on": False,
+        "animation_on": False,
+        "episodes": 3,
+        "max_steps": 10,
+        "epsilon_max": 1.0,
+        "epsilon_min": 0.05,
+        "learning_rate": 1e-4,
+        "lr_strategy": "linear",
+        "lr_decay": 0.3,
+        "min_learning_rate": 1e-5,
+        "moving_avg": 20,
+    }
+
+    LunarLanderGUI.train_and_run(gui)
+    gui._worker.join(timeout=1.0)
+
+    assert len(gui._plot_runs) == 1
+    assert gui._plot_runs[0]["rewards"] == [10.0, 20.0]

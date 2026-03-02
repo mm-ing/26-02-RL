@@ -1,0 +1,5 @@
+﻿policy, elapsed_s, sec_per_episode, steps_per_sec, last_reward
+PPO, 7.43, 7.43, 215.5, -100.50
+A2C, 3.29, 3.29, 486.0, -113.72
+SAC, 1.88, 1.88, 850.1, -111.61
+TD3, 1.97, 1.97, 813.2, -91.84

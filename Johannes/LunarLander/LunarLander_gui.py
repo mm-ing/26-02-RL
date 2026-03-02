@@ -377,7 +377,7 @@ class LunarLanderGUI:
         for spine in self.ax.spines.values():
             spine.set_alpha(0.5)
             spine.set_color("#9a9a9a")
-        self.figure.subplots_adjust(right=0.75)
+        self.figure.subplots_adjust(left=0.07, right=0.78)
 
         self.plot_canvas = FigureCanvasTkAgg(self.figure, master=self.plot_frame)
         self.plot_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
@@ -465,8 +465,8 @@ class LunarLanderGUI:
         min_lr_entry = ttk.Entry(specific_group, textvariable=self.min_learning_rate_var, width=self.PARAM_INPUT_WIDTH)
         self._add_pair(specific_group, 3, "Min LR", min_lr_entry, "LR decay", ttk.Entry(specific_group, textvariable=self.lr_decay_var, width=self.PARAM_INPUT_WIDTH))
         self._add_pair(specific_group, 4, "Replay size", ttk.Entry(specific_group, textvariable=self.replay_size_var, width=self.PARAM_INPUT_WIDTH), "Batch size", ttk.Entry(specific_group, textvariable=self.batch_size_var, width=self.PARAM_INPUT_WIDTH))
-        self._add_single(specific_group, 5, "Target update", ttk.Entry(specific_group, textvariable=self.target_update_var, width=self.PARAM_INPUT_WIDTH))
-        self._add_pair(specific_group, 6, "Learning start", ttk.Entry(specific_group, textvariable=self.replay_warmup_var, width=self.PARAM_INPUT_WIDTH), "Learning frequency", ttk.Entry(specific_group, textvariable=self.learning_cadence_var, width=self.PARAM_INPUT_WIDTH))
+        self._add_pair(specific_group, 5, "Learning start", ttk.Entry(specific_group, textvariable=self.replay_warmup_var, width=self.PARAM_INPUT_WIDTH), "Learning frequency", ttk.Entry(specific_group, textvariable=self.learning_cadence_var, width=self.PARAM_INPUT_WIDTH))
+        self._add_single(specific_group, 6, "Target update", ttk.Entry(specific_group, textvariable=self.target_update_var, width=self.PARAM_INPUT_WIDTH))
         lr_entry.bind("<FocusOut>", lambda _e: self._normalize_lr_inputs())
         min_lr_entry.bind("<FocusOut>", lambda _e: self._normalize_lr_inputs())
 
@@ -957,7 +957,7 @@ class LunarLanderGUI:
         return label
 
     def _start_worker(self, single_episode: bool) -> None:
-        self._drain_event_queue()
+        self._flush_event_queue()
         snap = self._snapshot_ui()
         if self._enforce_policy_environment_mode(str(snap["policy"]), show_info=True):
             snap = self._snapshot_ui()
@@ -1028,7 +1028,7 @@ class LunarLanderGUI:
         self._compare_mode_active = True
         self._workers.clear()
         self._close_aux_policy_trainers()
-        self._drain_event_queue()
+        self._flush_event_queue()
         self._latest_compare_rewards = {}
         self._latest_compare_eval_snapshots = {}
         self._compare_run_meta = {}
@@ -1330,6 +1330,61 @@ class LunarLanderGUI:
             except queue.Empty:
                 break
 
+    def _flush_event_queue(self) -> None:
+        single_by_type: Dict[str, Dict[str, object]] = {}
+        policy_by_type: Dict[str, Dict[str, Dict[str, object]]] = {}
+
+        merge_order = [
+            _UiEventType.STEP.value,
+            _UiEventType.EPISODE_END.value,
+            _UiEventType.FINALIZE.value,
+            _UiEventType.MISC.value,
+        ]
+
+        while True:
+            try:
+                event = self._event_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            if event.channel == "single":
+                event_key = event.event_type if event.event_type in merge_order else _UiEventType.MISC.value
+                if event_key not in single_by_type:
+                    single_by_type[event_key] = {}
+                single_by_type[event_key].update(event.payload)
+                continue
+
+            if event.channel == "policy" and event.run_key is not None:
+                event_key = event.event_type if event.event_type in merge_order else _UiEventType.MISC.value
+                if event.run_key not in policy_by_type:
+                    policy_by_type[event.run_key] = {}
+                if event_key not in policy_by_type[event.run_key]:
+                    policy_by_type[event.run_key][event_key] = {}
+                policy_by_type[event.run_key][event_key].update(event.payload)
+
+        pending: Optional[Dict[str, object]] = None
+        for event_key in merge_order:
+            payload = single_by_type.get(event_key)
+            if payload:
+                if pending is None:
+                    pending = {}
+                pending.update(payload)
+
+        pending_policy: Dict[str, Dict[str, object]] = {}
+        for run_key, typed_map in policy_by_type.items():
+            merged_payload: Dict[str, object] = {}
+            for event_key in merge_order:
+                payload = typed_map.get(event_key)
+                if payload:
+                    merged_payload.update(payload)
+            if merged_payload:
+                pending_policy[run_key] = merged_payload
+
+        if pending:
+            self._consume_pending(pending)
+        if pending_policy:
+            self._consume_policy_pending(pending_policy)
+
     def _ui_pump(self) -> None:
         now = time.perf_counter()
         elapsed_ms = max(0.0, (now - self._last_ui_pump_time) * 1000.0)
@@ -1620,6 +1675,17 @@ class LunarLanderGUI:
             leg_text.set_color("#d4d4d4")
             self._legend_map[leg_text] = line
 
+    def _wrap_legend_base(self, base: str) -> str:
+        tokens = [token.strip() for token in str(base).split(" | ")]
+        if len(tokens) <= 3:
+            return str(base)
+        first_line = " | ".join(tokens[:3])
+        second_line = " | ".join(tokens[3:])
+        return f"{first_line}\n{second_line}"
+
+    def _legend_group_labels(self, base: str) -> tuple[str, str, str]:
+        return self._wrap_legend_base(str(base)), "  MA", "  eval"
+
     def _update_single_preview(self, rewards: List[float], run_meta: Optional[Dict[str, object]] = None) -> None:
         self._clear_compare_preview_lines()
         x = list(range(1, len(rewards) + 1))
@@ -1634,18 +1700,19 @@ class LunarLanderGUI:
             float(snap.get("min_learning_rate", self.min_learning_rate_var.get())),
         )
         ma = self._moving_average(rewards, int(snap.get("moving_avg", self.moving_avg_var.get())))
+        reward_label, ma_label, _ = self._legend_group_labels(base)
         legend_dirty = False
         if self._preview_single_lines is None:
-            reward_line, = self.ax.plot(x, rewards, alpha=0.4, linewidth=1.0, label=f"{base} | reward")
-            ma_line, = self.ax.plot(x, ma, alpha=1.0, linewidth=2.2, color=reward_line.get_color(), label=f"{base} | MA")
+            reward_line, = self.ax.plot(x, rewards, alpha=0.4, linewidth=1.0, label=reward_label)
+            ma_line, = self.ax.plot(x, ma, alpha=1.0, linewidth=2.2, color=reward_line.get_color(), label=ma_label)
             self._preview_single_lines = (reward_line, ma_line)
             legend_dirty = True
         else:
             reward_line, ma_line = self._preview_single_lines
             reward_line.set_data(x, rewards)
             ma_line.set_data(x, ma)
-            reward_line.set_label(f"{base} | reward")
-            ma_line.set_label(f"{base} | MA")
+            reward_line.set_label(reward_label)
+            ma_line.set_label(ma_label)
         self._autoscale_plot(refresh_legend=legend_dirty)
 
     def _update_compare_preview(self, preview_active: Dict[str, List[float]]) -> None:
@@ -1673,18 +1740,19 @@ class LunarLanderGUI:
                 base = f"{base} | {descriptor}"
             ma_window = int(meta["moving_avg"]) if "moving_avg" in meta else self.moving_avg_var.get()
             ma = self._moving_average(rewards, ma_window)
+            reward_label, ma_label, _ = self._legend_group_labels(base)
 
             if run_key not in self._preview_compare_lines:
-                reward_line, = self.ax.plot(x, rewards, alpha=0.4, linewidth=1.0, label=f"{base} | reward")
-                ma_line, = self.ax.plot(x, ma, alpha=1.0, linewidth=2.2, color=reward_line.get_color(), label=f"{base} | MA")
+                reward_line, = self.ax.plot(x, rewards, alpha=0.4, linewidth=1.0, label=reward_label)
+                ma_line, = self.ax.plot(x, ma, alpha=1.0, linewidth=2.2, color=reward_line.get_color(), label=ma_label)
                 self._preview_compare_lines[run_key] = (reward_line, ma_line)
                 legend_dirty = True
             else:
                 reward_line, ma_line = self._preview_compare_lines[run_key]
                 reward_line.set_data(x, rewards)
                 ma_line.set_data(x, ma)
-                reward_line.set_label(f"{base} | reward")
-                ma_line.set_label(f"{base} | MA")
+                reward_line.set_label(reward_label)
+                ma_line.set_label(ma_label)
 
         self._autoscale_plot(refresh_legend=legend_dirty)
 
@@ -1765,7 +1833,7 @@ class LunarLanderGUI:
         for spine in self.ax.spines.values():
             spine.set_alpha(0.5)
             spine.set_color("#9a9a9a")
-        self.figure.subplots_adjust(right=0.75)
+        self.figure.subplots_adjust(left=0.07, right=0.78)
         self._legend_map.clear()
 
         lines = []
@@ -1773,9 +1841,10 @@ class LunarLanderGUI:
         for run in self._plot_runs:
             x = list(range(1, len(run["rewards"]) + 1))
             color = None
-            reward_line, = self.ax.plot(x, run["rewards"], alpha=0.4, linewidth=1.0, label=f"{run['base']} | reward", picker=5)
+            reward_label, ma_label, eval_label = self._legend_group_labels(str(run["base"]))
+            reward_line, = self.ax.plot(x, run["rewards"], alpha=0.4, linewidth=1.0, label=reward_label, picker=5)
             color = reward_line.get_color()
-            ma_line, = self.ax.plot(x, run["ma"], alpha=1.0, linewidth=2.2, color=color, label=f"{run['base']} | MA", picker=5)
+            ma_line, = self.ax.plot(x, run["ma"], alpha=1.0, linewidth=2.2, color=color, label=ma_label, picker=5)
             lines.extend([reward_line, ma_line])
 
             eval_x = list(run.get("eval_x", []))
@@ -1790,7 +1859,7 @@ class LunarLanderGUI:
                     marker="o",
                     markersize=3,
                     color=color,
-                    label=f"{run['base']} | eval",
+                    label=eval_label,
                     picker=5,
                 )
                 lines.append(eval_line)
@@ -1807,9 +1876,10 @@ class LunarLanderGUI:
                 float(snap["min_learning_rate"]),
             )
             x = list(range(1, len(preview_rewards) + 1))
-            reward_line, = self.ax.plot(x, preview_rewards, alpha=0.4, linewidth=1.0, label=f"{base} | reward")
+            reward_label, ma_label, _ = self._legend_group_labels(base)
+            reward_line, = self.ax.plot(x, preview_rewards, alpha=0.4, linewidth=1.0, label=reward_label)
             ma = self._moving_average(preview_rewards, int(snap["moving_avg"]))
-            ma_line, = self.ax.plot(x, ma, alpha=1.0, linewidth=2.2, color=reward_line.get_color(), label=f"{base} | MA")
+            ma_line, = self.ax.plot(x, ma, alpha=1.0, linewidth=2.2, color=reward_line.get_color(), label=ma_label)
             lines.extend([reward_line, ma_line])
 
         if preview_compare is not None:
@@ -1830,9 +1900,10 @@ class LunarLanderGUI:
                 if descriptor:
                     base = f"{base} | {descriptor}"
                 x = list(range(1, len(rewards) + 1))
-                reward_line, = self.ax.plot(x, rewards, alpha=0.4, linewidth=1.0, label=f"{base} | reward")
+                reward_label, ma_label, _ = self._legend_group_labels(base)
+                reward_line, = self.ax.plot(x, rewards, alpha=0.4, linewidth=1.0, label=reward_label)
                 ma = self._moving_average(rewards, ma_window)
-                ma_line, = self.ax.plot(x, ma, alpha=1.0, linewidth=2.2, color=reward_line.get_color(), label=f"{base} | MA")
+                ma_line, = self.ax.plot(x, ma, alpha=1.0, linewidth=2.2, color=reward_line.get_color(), label=ma_label)
                 lines.extend([reward_line, ma_line])
 
         if lines:
@@ -1898,17 +1969,8 @@ class LunarLanderGUI:
             self.root.after(30, self._render_tick)
             return
         if self.animation_on_var.get() and now - self._last_render_update >= 1.0 / effective_fps:
-            should_draw = True
-            if active_workers:
-                should_draw = not (
-                    self._latest_step == self._last_rendered_step
-                    and self._latest_episode == self._last_rendered_episode
-                )
-            if should_draw:
-                self._draw_latest_frame()
-                self._last_rendered_step = self._latest_step
-                self._last_rendered_episode = self._latest_episode
-                self._last_render_update = now
+            self._draw_latest_frame()
+            self._last_render_update = now
         self.root.after(30, self._render_tick)
 
     def _draw_latest_frame(self) -> None:
