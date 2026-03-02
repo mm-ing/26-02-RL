@@ -1,6 +1,8 @@
 gymnasium[box2d]
 pygame
 torch
+stable-baselines3
+sb3-contrib
 numpy
 matplotlib
 pillow

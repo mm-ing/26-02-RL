@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import os
+import queue
 import threading
 import time
 import tkinter as tk
-from dataclasses import asdict
+from enum import Enum
+from itertools import product
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from tkinter import messagebox, ttk
 from typing import Dict, List, Optional
@@ -14,7 +17,7 @@ import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-from LunarLander_logic import POLICY_DEFAULTS, Trainer
+from LunarLander_logic import CONTINUOUS_POLICIES, POLICY_DEFAULTS, Trainer, set_device_preference
 
 matplotlib.use("TkAgg")
 
@@ -23,6 +26,77 @@ try:
 except Exception:
     Image = None
     ImageTk = None
+
+
+@dataclass(frozen=True)
+class _WorkerUiEvent:
+    channel: str
+    payload: Dict[str, object]
+    event_type: str = "misc"
+    run_key: Optional[str] = None
+
+
+class _UiEventType(str, Enum):
+    STEP = "step"
+    EPISODE_END = "episode_end"
+    FINALIZE = "finalize"
+    MISC = "misc"
+
+
+@dataclass(frozen=True)
+class _StepEventPayload:
+    step: int
+    episode: int
+
+    def to_payload(self) -> Dict[str, object]:
+        return {"step": int(self.step), "episode": int(self.episode)}
+
+
+@dataclass(frozen=True)
+class _EpisodeEndPayload:
+    episode: int
+    epsilon: float
+    last_episode_steps: int
+    best_reward: float
+    animate_episode: bool
+    rewards_snapshot: Optional[List[float]] = None
+    run_meta: Optional[Dict[str, object]] = None
+
+    def to_payload(self) -> Dict[str, object]:
+        payload: Dict[str, object] = {
+            "episode": int(self.episode),
+            "epsilon": float(self.epsilon),
+            "last_episode_steps": int(self.last_episode_steps),
+            "best_reward": float(self.best_reward),
+            "animate_episode": bool(self.animate_episode),
+        }
+        if self.rewards_snapshot is not None:
+            payload["rewards_snapshot"] = list(self.rewards_snapshot)
+            payload["step"] = int(self.last_episode_steps)
+        if self.run_meta is not None:
+            payload["run_meta"] = dict(self.run_meta)
+        return payload
+
+
+@dataclass(frozen=True)
+class _FinalizePayload:
+    rewards_snapshot: List[float]
+    eval_snapshot: List[tuple[int, float]]
+    finished: bool
+    epsilon: float
+    run_meta: Optional[Dict[str, object]] = None
+
+    def to_payload(self) -> Dict[str, object]:
+        payload: Dict[str, object] = {
+            "finalize_run": True,
+            "rewards_snapshot": list(self.rewards_snapshot),
+            "eval_snapshot": list(self.eval_snapshot),
+            "finished": bool(self.finished),
+            "epsilon": float(self.epsilon),
+        }
+        if self.run_meta is not None:
+            payload["run_meta"] = dict(self.run_meta)
+        return payload
 
 
 class LunarLanderGUI:
@@ -40,45 +114,94 @@ class LunarLanderGUI:
         self._configure_styles()
 
         self.trainer = Trainer()
-        self._pending_lock = threading.Lock()
-        self._pending_state: Dict[str, object] = {}
-        self._pending_policy_state: Dict[str, Dict[str, object]] = {}
+        self._event_queue: "queue.Queue[_WorkerUiEvent]" = queue.Queue()
         self._stop_requested = threading.Event()
         self._pause_requested = threading.Event()
         self._worker: Optional[threading.Thread] = None
         self._workers: Dict[str, threading.Thread] = {}
         self._policy_trainers: Dict[str, Trainer] = {}
         self._compare_mode_active = False
-        self._compare_run_meta: Dict[str, Dict[str, float]] = {}
+        self._compare_run_meta: Dict[str, Dict[str, object]] = {}
+        self._compare_selected_run_key: Optional[str] = None
+        self._single_run_meta: Dict[str, object] = {}
         self._latest_compare_rewards: Dict[str, List[float]] = {}
+        self._latest_compare_eval_snapshots: Dict[str, List[tuple[int, float]]] = {}
         self._compare_finalized_policies: set[str] = set()
 
         self._latest_rewards_snapshot: Optional[List[float]] = None
+        self._latest_eval_snapshot: List[tuple[int, float]] = []
         self._latest_episode = 0
         self._latest_step = 0
         self._last_plot_update = 0.0
         self._last_render_update = 0.0
         self._last_rendered_step = -1
         self._last_rendered_episode = -1
+        self._animate_current_episode = True
 
         self._plot_runs: List[Dict[str, object]] = []
         self._run_counter = 0
-        self._current_x = None
-        self._best_x = None
+        self._best_reward = None
+        self._last_episode_steps = 0
 
         self._legend_map: Dict[object, object] = {}
         self._preview_single_lines: Optional[tuple] = None
         self._preview_compare_lines: Dict[str, tuple] = {}
 
+        self._eval_interval = 10
+        self._eval_episodes = 3
+        self._eval_seed_base = 17_031
+        self._max_compare_runs = 24
+        self._max_parallel_compare_workers = max(1, min(4, (os.cpu_count() or 4)))
+        self._compare_worker_semaphore = threading.Semaphore(self._max_parallel_compare_workers)
+        self._ui_pump_interval_ms = 40.0
+        self._last_ui_pump_time = time.perf_counter()
+        self._animate_current_episode = True
+        self._ui_lag_last_ms = 0.0
+        self._ui_lag_max_ms = 0.0
+
         self._build_variables()
+        set_device_preference(False)
         self._build_layout()
+        self._update_device_button_text()
         self._apply_policy_defaults(self.policy_var.get())
         self._selected_render_trainer = self.trainer
-        self._set_status_text(self.epsilon_max_var.get(), None, None)
+        self._set_status_text(self.epsilon_max_var.get())
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.root.after(40, self._ui_pump)
+        self.root.after(int(self._ui_pump_interval_ms), self._ui_pump)
         self.root.after(50, self._render_tick)
+
+    def _single_plot_interval(self) -> float:
+        rewards_snapshot = getattr(self, "_latest_rewards_snapshot", None)
+        rewards_len = len(rewards_snapshot) if rewards_snapshot is not None else 0
+        interval = 0.15
+        if rewards_len >= 600:
+            interval = 0.30
+        if rewards_len >= 1500:
+            interval = 0.50
+        ui_lag_last_ms = float(getattr(self, "_ui_lag_last_ms", 0.0))
+        if ui_lag_last_ms > 150.0:
+            interval = max(interval, 0.50)
+        if ui_lag_last_ms > 250.0:
+            interval = max(interval, 0.80)
+        return interval
+
+    def _compare_plot_interval(self) -> float:
+        max_len = 0
+        compare_rewards = getattr(self, "_latest_compare_rewards", {})
+        if compare_rewards:
+            max_len = max((len(v) for v in compare_rewards.values()), default=0)
+        interval = 0.30
+        if max_len >= 400:
+            interval = 0.50
+        if max_len >= 1200:
+            interval = 0.80
+        ui_lag_last_ms = float(getattr(self, "_ui_lag_last_ms", 0.0))
+        if ui_lag_last_ms > 150.0:
+            interval = max(interval, 0.80)
+        if ui_lag_last_ms > 250.0:
+            interval = max(interval, 1.10)
+        return interval
 
     def _configure_styles(self) -> None:
         style = ttk.Style(self.root)
@@ -131,7 +254,9 @@ class LunarLanderGUI:
         self.policy_var = tk.StringVar(value="D3QN")
 
         self.animation_fps_var = tk.IntVar(value=10)
+        self.update_rate_episodes_var = tk.IntVar(value=5)
         self.animation_on_var = tk.BooleanVar(value=True)
+        self.continous_var = tk.BooleanVar(value=False)
         self.gravity_var = tk.DoubleVar(value=-10.0)
         self.wind_on_var = tk.BooleanVar(value=False)
         self.wind_power_var = tk.DoubleVar(value=15.0)
@@ -146,7 +271,7 @@ class LunarLanderGUI:
         self.epsilon_min_var = tk.DoubleVar(value=0.05)
 
         self.gamma_var = tk.DoubleVar(value=0.99)
-        self.learning_rate_var = tk.DoubleVar(value=0.001)
+        self.learning_rate_var = tk.StringVar(value=self._format_scientific(0.001))
         self.replay_size_var = tk.IntVar(value=50000)
         self.batch_size_var = tk.IntVar(value=64)
         self.target_update_var = tk.IntVar(value=100)
@@ -154,16 +279,28 @@ class LunarLanderGUI:
         self.learning_cadence_var = tk.IntVar(value=2)
         self.activation_var = tk.StringVar(value="ReLU")
         self.hidden_layers_var = tk.StringVar(value="128")
+        self.lr_strategy_var = tk.StringVar(value="exponential")
+        self.lr_decay_var = tk.DoubleVar(value=0.1)
+        self.min_learning_rate_var = tk.StringVar(value=self._format_scientific(1e-5))
+        self.gae_lambda_var = tk.DoubleVar(value=0.95)
+        self.ppo_clip_range_var = tk.DoubleVar(value=0.2)
 
         self.moving_avg_var = tk.IntVar(value=20)
+
+        self.compare_param_var = tk.StringVar(value="Policy")
+        self.compare_values_var = tk.StringVar(value="")
+        self.compare_summary_var = tk.StringVar(value="")
+        self._compare_param_lists: Dict[str, List[object]] = {}
+        self._compare_raw_lists: Dict[str, str] = {}
+        self.use_gpu = False
 
         self.steps_progress_var = tk.DoubleVar(value=0)
         self.episodes_progress_var = tk.DoubleVar(value=0)
         self.status_var = tk.StringVar(value="")
 
     def _build_layout(self) -> None:
-        self.root.columnconfigure(0, weight=4)
-        self.root.columnconfigure(1, weight=0)
+        self.root.columnconfigure(0, weight=2)
+        self.root.columnconfigure(1, weight=1)
         self.root.rowconfigure(0, weight=5)
         self.root.rowconfigure(1, weight=0)
         self.root.rowconfigure(2, weight=0)
@@ -181,7 +318,7 @@ class LunarLanderGUI:
         self._canvas_image_id = None
 
         self.params_frame = ttk.LabelFrame(self.root, text="Parameters")
-        self.params_frame.grid(row=0, column=1, sticky="ns", padx=(0, self.PAD_OUTER), pady=self.PAD_OUTER)
+        self.params_frame.grid(row=0, column=1, sticky="nsew", padx=(0, self.PAD_OUTER), pady=self.PAD_OUTER)
         self.params_frame.rowconfigure(0, weight=1)
         self.params_frame.columnconfigure(0, weight=1)
 
@@ -189,7 +326,7 @@ class LunarLanderGUI:
 
         self.controls_frame = ttk.LabelFrame(self.root, text="Controls")
         self.controls_frame.grid(row=1, column=0, columnspan=2, sticky="ew", padx=self.PAD_OUTER, pady=(0, self.PAD_OUTER))
-        for i in range(7):
+        for i in range(8):
             self.controls_frame.columnconfigure(i, weight=1)
 
         self.btn_single = ttk.Button(self.controls_frame, text="Run single episode", command=self.run_single_episode)
@@ -199,8 +336,9 @@ class LunarLanderGUI:
         self.btn_clear = ttk.Button(self.controls_frame, text="Clear Plot", command=self.clear_plot)
         self.btn_csv = ttk.Button(self.controls_frame, text="Save samplings CSV", command=self.save_samplings_csv)
         self.btn_png = ttk.Button(self.controls_frame, text="Save Plot PNG", command=self.save_plot_png)
+        self.btn_device = ttk.Button(self.controls_frame, text="Current device: CPU", command=self.toggle_device)
 
-        buttons = [self.btn_single, self.btn_train, self.btn_pause, self.btn_reset, self.btn_clear, self.btn_csv, self.btn_png]
+        buttons = [self.btn_single, self.btn_train, self.btn_pause, self.btn_reset, self.btn_clear, self.btn_csv, self.btn_png, self.btn_device]
         for idx, button in enumerate(buttons):
             button.grid(row=0, column=idx, sticky="ew", padx=self.PAD_TIGHT, pady=self.PAD_INNER)
         self._update_control_highlights()
@@ -246,12 +384,13 @@ class LunarLanderGUI:
         self.plot_canvas.mpl_connect("pick_event", self._on_legend_pick)
 
     def _build_scrollable_params(self) -> None:
-        self.params_canvas = tk.Canvas(self.params_frame, highlightthickness=0, width=430, bg="#1e1e1e")
+        self.params_canvas = tk.Canvas(self.params_frame, highlightthickness=0, width=215, bg="#1e1e1e")
         self.params_canvas.grid(row=0, column=0, sticky="nsew")
         self.params_scroll = ttk.Scrollbar(self.params_frame, orient="vertical", command=self.params_canvas.yview)
         self.params_canvas.configure(yscrollcommand=self.params_scroll.set)
 
         self.params_inner = ttk.Frame(self.params_canvas)
+        self.params_inner.columnconfigure(0, weight=1)
         self.params_window = self.params_canvas.create_window((0, 0), window=self.params_inner, anchor="nw")
 
         self.params_inner.bind("<Configure>", self._on_params_configure)
@@ -269,40 +408,67 @@ class LunarLanderGUI:
         env_group.columnconfigure(3, weight=1)
 
         self._add_pair(env_group, 0, "Animation on", ttk.Checkbutton(env_group, variable=self.animation_on_var), "Animation FPS", ttk.Entry(env_group, textvariable=self.animation_fps_var, width=self.PARAM_INPUT_WIDTH))
-        ttk.Button(env_group, text="Update", command=self.update_environment).grid(row=1, column=0, columnspan=4, sticky="ew", padx=self.PAD_TIGHT, pady=self.PAD_TIGHT)
-        self._add_pair(env_group, 2, "Gravity", ttk.Entry(env_group, textvariable=self.gravity_var, width=self.PARAM_INPUT_WIDTH), "Wind on", ttk.Checkbutton(env_group, variable=self.wind_on_var))
-        self._add_pair(env_group, 3, "Wind power", ttk.Entry(env_group, textvariable=self.wind_power_var, width=self.PARAM_INPUT_WIDTH), "Turbulence", ttk.Entry(env_group, textvariable=self.turbulence_var, width=self.PARAM_INPUT_WIDTH))
+        self._add_single(env_group, 1, "Update rate (episodes)", ttk.Entry(env_group, textvariable=self.update_rate_episodes_var, width=self.PARAM_INPUT_WIDTH))
+        ttk.Button(env_group, text="Update", command=self.update_environment).grid(row=2, column=0, columnspan=4, sticky="ew", padx=self.PAD_TIGHT, pady=self.PAD_TIGHT)
+        self._add_single(env_group, 3, "continous", ttk.Checkbutton(env_group, variable=self.continous_var))
+        self._add_pair(env_group, 4, "Gravity", ttk.Entry(env_group, textvariable=self.gravity_var, width=self.PARAM_INPUT_WIDTH), "Wind on", ttk.Checkbutton(env_group, variable=self.wind_on_var))
+        self._add_pair(env_group, 5, "Wind power", ttk.Entry(env_group, textvariable=self.wind_power_var, width=self.PARAM_INPUT_WIDTH), "Turbulence", ttk.Entry(env_group, textvariable=self.turbulence_var, width=self.PARAM_INPUT_WIDTH))
 
         compare_group = ttk.LabelFrame(self.params_inner, text="Compare")
         compare_group.grid(row=1, column=0, sticky="ew", padx=self.PAD_TIGHT, pady=self.PAD_TIGHT)
         compare_group.columnconfigure(1, weight=1)
         compare_group.columnconfigure(3, weight=1)
-        self._add_pair(compare_group, 0, "Compare on", ttk.Checkbutton(compare_group, variable=self.compare_on_var), "", ttk.Label(compare_group, text=""))
+        self._add_pair(compare_group, 0, "Compare on", ttk.Checkbutton(compare_group, variable=self.compare_on_var), "", ttk.Button(compare_group, text="Clear", command=self._clear_compare_parameter_lists))
+        compare_param_combo = ttk.Combobox(
+            compare_group,
+            textvariable=self.compare_param_var,
+            values=list(self._compare_parameter_specs().keys()),
+            state="readonly",
+            width=self.PARAM_INPUT_WIDTH,
+        )
+        compare_values_entry = ttk.Entry(compare_group, textvariable=self.compare_values_var, width=self.PARAM_INPUT_WIDTH)
+        self._add_pair(compare_group, 1, "Parameter", compare_param_combo, "Options", compare_values_entry)
+        compare_param_combo.bind("<<ComboboxSelected>>", self._on_compare_param_changed)
+        compare_values_entry.bind("<FocusOut>", lambda _e: self._commit_compare_parameter_input(show_error=False))
+        compare_values_entry.bind("<Return>", lambda _e: self._commit_compare_parameter_input(show_error=True))
+        ttk.Label(compare_group, textvariable=self.compare_summary_var, justify="left", anchor="w").grid(
+            row=2,
+            column=0,
+            columnspan=4,
+            sticky="ew",
+            padx=self.PAD_TIGHT,
+            pady=(0, self.PAD_TIGHT),
+        )
 
         general_group = ttk.LabelFrame(self.params_inner, text="General")
         general_group.grid(row=2, column=0, sticky="ew", padx=self.PAD_TIGHT, pady=self.PAD_TIGHT)
         general_group.columnconfigure(1, weight=1)
         general_group.columnconfigure(3, weight=1)
 
-        ttk.Label(general_group, text="Policy").grid(row=0, column=0, sticky="w", padx=self.PAD_TIGHT, pady=self.PAD_TIGHT)
-        policy_combo = ttk.Combobox(general_group, textvariable=self.policy_var, values=["DuelingDQN", "D3QN", "DDQN+PER"], state="readonly")
-        policy_combo.grid(row=0, column=1, sticky="ew", padx=self.PAD_TIGHT, pady=self.PAD_TIGHT)
-        policy_combo.bind("<<ComboboxSelected>>", self._on_policy_changed)
-
-        self._add_pair(general_group, 1, "Max steps", ttk.Entry(general_group, textvariable=self.max_steps_var, width=self.PARAM_INPUT_WIDTH), "Episodes", ttk.Entry(general_group, textvariable=self.episodes_var, width=self.PARAM_INPUT_WIDTH))
-        self._add_pair(general_group, 2, "Epsilon max", ttk.Entry(general_group, textvariable=self.epsilon_max_var, width=self.PARAM_INPUT_WIDTH), "Epsilon decay", ttk.Entry(general_group, textvariable=self.epsilon_decay_var, width=self.PARAM_INPUT_WIDTH))
-        self._add_pair(general_group, 3, "Epsilon min", ttk.Entry(general_group, textvariable=self.epsilon_min_var, width=self.PARAM_INPUT_WIDTH), "", ttk.Label(general_group, text=""))
+        self._add_pair(general_group, 0, "Max steps", ttk.Entry(general_group, textvariable=self.max_steps_var, width=self.PARAM_INPUT_WIDTH), "Episodes", ttk.Entry(general_group, textvariable=self.episodes_var, width=self.PARAM_INPUT_WIDTH))
+        self._add_pair(general_group, 1, "Epsilon max", ttk.Entry(general_group, textvariable=self.epsilon_max_var, width=self.PARAM_INPUT_WIDTH), "Epsilon decay", ttk.Entry(general_group, textvariable=self.epsilon_decay_var, width=self.PARAM_INPUT_WIDTH))
+        self._add_pair(general_group, 2, "Epsilon min", ttk.Entry(general_group, textvariable=self.epsilon_min_var, width=self.PARAM_INPUT_WIDTH), "Gamma", ttk.Entry(general_group, textvariable=self.gamma_var, width=self.PARAM_INPUT_WIDTH))
 
         specific_group = ttk.LabelFrame(self.params_inner, text="Specific")
         specific_group.grid(row=3, column=0, sticky="ew", padx=self.PAD_TIGHT, pady=self.PAD_TIGHT)
         specific_group.columnconfigure(1, weight=1)
         specific_group.columnconfigure(3, weight=1)
 
-        self._add_pair(specific_group, 0, "Gamma", ttk.Entry(specific_group, textvariable=self.gamma_var, width=self.PARAM_INPUT_WIDTH), "Learning rate", ttk.Entry(specific_group, textvariable=self.learning_rate_var, width=self.PARAM_INPUT_WIDTH))
-        self._add_pair(specific_group, 1, "Replay size", ttk.Entry(specific_group, textvariable=self.replay_size_var, width=self.PARAM_INPUT_WIDTH), "Batch size", ttk.Entry(specific_group, textvariable=self.batch_size_var, width=self.PARAM_INPUT_WIDTH))
-        self._add_pair(specific_group, 2, "Target update", ttk.Entry(specific_group, textvariable=self.target_update_var, width=self.PARAM_INPUT_WIDTH), "Replay warmup", ttk.Entry(specific_group, textvariable=self.replay_warmup_var, width=self.PARAM_INPUT_WIDTH))
-        self._add_pair(specific_group, 3, "Learning cadence", ttk.Entry(specific_group, textvariable=self.learning_cadence_var, width=self.PARAM_INPUT_WIDTH), "Activation", ttk.Combobox(specific_group, textvariable=self.activation_var, values=["ReLU", "Tanh", "LeakyReLU", "ELU"], state="readonly", width=self.PARAM_INPUT_WIDTH))
-        self._add_pair(specific_group, 4, "Hidden layers", ttk.Entry(specific_group, textvariable=self.hidden_layers_var, width=self.PARAM_INPUT_WIDTH), "", ttk.Label(specific_group, text=""))
+        ttk.Label(specific_group, text="Policy").grid(row=0, column=0, sticky="w", padx=self.PAD_TIGHT, pady=self.PAD_TIGHT)
+        policy_combo = ttk.Combobox(specific_group, textvariable=self.policy_var, values=list(POLICY_DEFAULTS.keys()), state="readonly", width=self.PARAM_INPUT_WIDTH)
+        policy_combo.grid(row=0, column=1, sticky="ew", padx=self.PAD_TIGHT, pady=self.PAD_TIGHT)
+        policy_combo.bind("<<ComboboxSelected>>", self._on_policy_changed)
+
+        lr_entry = ttk.Entry(specific_group, textvariable=self.learning_rate_var, width=self.PARAM_INPUT_WIDTH)
+        self._add_pair(specific_group, 1, "Hidden layer", ttk.Entry(specific_group, textvariable=self.hidden_layers_var, width=self.PARAM_INPUT_WIDTH), "Activation", ttk.Combobox(specific_group, textvariable=self.activation_var, values=["ReLU", "Tanh", "LeakyReLU", "ELU"], state="readonly", width=self.PARAM_INPUT_WIDTH))
+        self._add_pair(specific_group, 2, "LR", lr_entry, "LR strategy", ttk.Combobox(specific_group, textvariable=self.lr_strategy_var, values=["exponential", "linear", "cosine", "loss-based", "guarded natural gradient"], state="readonly", width=self.PARAM_INPUT_WIDTH))
+        min_lr_entry = ttk.Entry(specific_group, textvariable=self.min_learning_rate_var, width=self.PARAM_INPUT_WIDTH)
+        self._add_pair(specific_group, 3, "Min LR", min_lr_entry, "LR decay", ttk.Entry(specific_group, textvariable=self.lr_decay_var, width=self.PARAM_INPUT_WIDTH))
+        self._add_pair(specific_group, 4, "Replay size", ttk.Entry(specific_group, textvariable=self.replay_size_var, width=self.PARAM_INPUT_WIDTH), "Batch size", ttk.Entry(specific_group, textvariable=self.batch_size_var, width=self.PARAM_INPUT_WIDTH))
+        self._add_single(specific_group, 5, "Target update", ttk.Entry(specific_group, textvariable=self.target_update_var, width=self.PARAM_INPUT_WIDTH))
+        self._add_pair(specific_group, 6, "Learning start", ttk.Entry(specific_group, textvariable=self.replay_warmup_var, width=self.PARAM_INPUT_WIDTH), "Learning frequency", ttk.Entry(specific_group, textvariable=self.learning_cadence_var, width=self.PARAM_INPUT_WIDTH))
+        lr_entry.bind("<FocusOut>", lambda _e: self._normalize_lr_inputs())
+        min_lr_entry.bind("<FocusOut>", lambda _e: self._normalize_lr_inputs())
 
         plot_group = ttk.LabelFrame(self.params_inner, text="Live Plot")
         plot_group.grid(row=4, column=0, sticky="ew", padx=self.PAD_TIGHT, pady=self.PAD_TIGHT)
@@ -316,6 +482,10 @@ class LunarLanderGUI:
         ttk.Label(parent, text=l2).grid(row=row, column=2, sticky="w", padx=self.PAD_TIGHT, pady=2)
         w2.grid(row=row, column=3, sticky="ew", padx=self.PAD_TIGHT, pady=2)
 
+    def _add_single(self, parent: ttk.LabelFrame, row: int, label: str, widget) -> None:
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", padx=self.PAD_TIGHT, pady=2)
+        widget.grid(row=row, column=1, sticky="ew", padx=self.PAD_TIGHT, pady=2)
+
     def _on_params_configure(self, _event=None) -> None:
         self.params_canvas.configure(scrollregion=self.params_canvas.bbox("all"))
         self._refresh_scrollbar_visibility()
@@ -325,6 +495,7 @@ class LunarLanderGUI:
         self._refresh_scrollbar_visibility()
 
     def _refresh_scrollbar_visibility(self) -> None:
+        self._auto_fit_params_canvas_width()
         self.root.update_idletasks()
         bbox = self.params_canvas.bbox("all")
         if bbox is None:
@@ -339,6 +510,16 @@ class LunarLanderGUI:
             self._scroll_visible = False
             self.params_canvas.yview_moveto(0)
 
+    def _auto_fit_params_canvas_width(self) -> None:
+        root_w = int(self.root.winfo_width())
+        if root_w <= 1:
+            root_w = 1300
+        target = int(root_w / 6)
+        target = max(205, min(260, target))
+        current = int(self.params_canvas.cget("width"))
+        if abs(current - target) >= 2:
+            self.params_canvas.configure(width=target)
+
     def _bind_mousewheel(self, _event=None) -> None:
         self.params_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
 
@@ -352,18 +533,231 @@ class LunarLanderGUI:
 
     def _on_policy_changed(self, _event=None) -> None:
         self._apply_policy_defaults(self.policy_var.get())
-        selected = self.policy_var.get()
-        if self._compare_mode_active and selected in self._policy_trainers:
-            self._selected_render_trainer = self._policy_trainers[selected]
+        self._enforce_policy_environment_mode(self.policy_var.get(), show_info=True)
+        if self._compare_mode_active:
+            self._select_compare_render_run()
+
+    def _enforce_policy_environment_mode(self, policy: str, show_info: bool) -> bool:
+        should_be_continous = policy in CONTINUOUS_POLICIES
+        current = bool(self.continous_var.get())
+        if current == should_be_continous:
+            return False
+
+        self.continous_var.set(should_be_continous)
+
+        if not self._has_active_workers():
+            snap = self._snapshot_ui()
+            self.trainer.rebuild_environment(
+                snap["gravity"],
+                should_be_continous,
+                snap["enable_wind"],
+                snap["wind_power"],
+                snap["turbulence_power"],
+            )
+            self._best_reward = None
+            self._last_episode_steps = 0
+            self._set_status_text(snap["epsilon_max"])
+            self._draw_latest_frame()
+
+        if show_info:
+            mode_text = "continuous=True" if should_be_continous else "continuous=False"
+            messagebox.showinfo("Environment mode adjusted", f"Policy '{policy}' requires {mode_text}. Environment mode was updated.")
+
+        return True
 
     def _on_compare_toggle_changed(self, *_args) -> None:
         if self.compare_on_var.get():
             self.animation_on_var.set(False)
 
+    def _update_device_button_text(self) -> None:
+        text = "Current device: GPU" if self.use_gpu else "Current device: CPU"
+        self.btn_device.configure(text=text)
+
+    def toggle_device(self) -> None:
+        use_gpu = not self.use_gpu
+        if self._has_active_workers():
+            messagebox.showwarning("Training running", "Stop training before switching device.")
+            return
+
+        actual = set_device_preference(use_gpu)
+        self.use_gpu = actual.type == "cuda" and use_gpu
+        self.trainer.agents.clear()
+        for trainer in self._policy_trainers.values():
+            trainer.agents.clear()
+        if use_gpu and actual.type != "cuda":
+            messagebox.showwarning("GPU unavailable", "CUDA is not available. Falling back to CPU.")
+        self._update_device_button_text()
+
+    def _compare_parameter_specs(self) -> Dict[str, Dict[str, object]]:
+        return {
+            "Policy": {"key": "policy", "kind": "option", "options": list(POLICY_DEFAULTS.keys())},
+            "Max steps": {"key": "max_steps", "kind": "int"},
+            "Episodes": {"key": "episodes", "kind": "int"},
+            "Epsilon max": {"key": "epsilon_max", "kind": "float"},
+            "Epsilon decay": {"key": "epsilon_decay", "kind": "float"},
+            "Epsilon min": {"key": "epsilon_min", "kind": "float"},
+            "Gamma": {"key": "gamma", "kind": "float"},
+            "LR": {"key": "learning_rate", "kind": "float"},
+            "Replay size": {"key": "replay_size", "kind": "int"},
+            "Batch size": {"key": "batch_size", "kind": "int"},
+            "Target update": {"key": "target_update", "kind": "int"},
+            "Learning start": {"key": "replay_warmup", "kind": "int"},
+            "Learning frequency": {"key": "learning_cadence", "kind": "int"},
+            "Activation": {"key": "activation_function", "kind": "option", "options": ["ReLU", "Tanh", "LeakyReLU", "ELU"]},
+            "Hidden layer": {"key": "hidden_layers", "kind": "str"},
+            "LR strategy": {"key": "lr_strategy", "kind": "option", "options": ["exponential", "linear", "cosine", "loss-based", "guarded natural gradient"]},
+            "LR decay": {"key": "lr_decay", "kind": "float"},
+            "Min LR": {"key": "min_learning_rate", "kind": "float"},
+            "continous": {"key": "continous", "kind": "bool"},
+            "Gravity": {"key": "gravity", "kind": "float"},
+            "Wind on": {"key": "enable_wind", "kind": "bool"},
+            "Wind power": {"key": "wind_power", "kind": "float"},
+            "Turbulence": {"key": "turbulence_power", "kind": "float"},
+            "Moving average values": {"key": "moving_avg", "kind": "int"},
+        }
+
+    def _parse_compare_bool(self, token: str) -> bool:
+        value = token.strip().lower()
+        if value in {"1", "true", "on", "yes"}:
+            return True
+        if value in {"0", "false", "off", "no"}:
+            return False
+        raise ValueError(f"Invalid boolean value '{token}'")
+
+    def _parse_compare_values(self, parameter_name: str, raw: str) -> List[object]:
+        specs = self._compare_parameter_specs()
+        spec = specs.get(parameter_name)
+        if spec is None:
+            raise ValueError(f"Unknown compare parameter '{parameter_name}'")
+        tokens = [t.strip() for t in str(raw).split(",") if t.strip()]
+        if not tokens:
+            return []
+
+        kind = str(spec["kind"])
+        parsed: List[object] = []
+        if kind == "option":
+            options = [str(v) for v in spec["options"]]
+            lower_map = {opt.lower(): opt for opt in options}
+            for token in tokens:
+                mapped = lower_map.get(token.lower())
+                if mapped is None:
+                    raise ValueError(f"Invalid value '{token}' for {parameter_name}")
+                if mapped not in parsed:
+                    parsed.append(mapped)
+            return parsed
+
+        for token in tokens:
+            if kind == "int":
+                value = int(float(token))
+            elif kind == "float":
+                value = float(token)
+            elif kind == "bool":
+                value = self._parse_compare_bool(token)
+            else:
+                value = token
+            if value not in parsed:
+                parsed.append(value)
+        return parsed
+
+    def _format_compare_value(self, value: object) -> str:
+        if isinstance(value, float):
+            return self._format_legend_number(value)
+        return str(value)
+
+    def _refresh_compare_summary(self) -> None:
+        if not self._compare_param_lists:
+            self.compare_summary_var.set("")
+            return
+        lines = []
+        for parameter_name, values in self._compare_param_lists.items():
+            rendered = ", ".join(self._format_compare_value(v) for v in values)
+            lines.append(f"{parameter_name}: [{rendered}]")
+        self.compare_summary_var.set("\n".join(lines))
+
+    def _clear_compare_parameter_lists(self) -> None:
+        self._compare_param_lists.clear()
+        self._compare_raw_lists.clear()
+        self.compare_values_var.set("")
+        self._refresh_compare_summary()
+
+    def _commit_compare_parameter_input(self, show_error: bool) -> bool:
+        parameter_name = self.compare_param_var.get()
+        raw = self.compare_values_var.get()
+        self._compare_raw_lists[parameter_name] = raw
+        try:
+            values = self._parse_compare_values(parameter_name, raw)
+        except Exception as exc:
+            if show_error:
+                messagebox.showerror("Compare input invalid", str(exc))
+            return False
+
+        if values:
+            self._compare_param_lists[parameter_name] = values
+        else:
+            self._compare_param_lists.pop(parameter_name, None)
+        self._refresh_compare_summary()
+        return True
+
+    def _on_compare_param_changed(self, *_args) -> None:
+        self._commit_compare_parameter_input(show_error=False)
+        selected = self.compare_param_var.get()
+        self.compare_values_var.set(self._compare_raw_lists.get(selected, ""))
+
+    def _build_compare_run_configs(self, snap: Dict[str, object]) -> List[Dict[str, object]]:
+        if not self._commit_compare_parameter_input(show_error=True):
+            raise ValueError("Invalid compare parameter input")
+        if not self._compare_param_lists:
+            return [dict(snap)]
+
+        specs = self._compare_parameter_specs()
+        parameter_names = [name for name in self._compare_param_lists.keys() if name in specs]
+        value_lists = [self._compare_param_lists[name] for name in parameter_names]
+        compared_keys = {str(specs[name]["key"]) for name in parameter_names}
+        run_configs: List[Dict[str, object]] = []
+
+        for combo_values in product(*value_lists):
+            run_snap = dict(snap)
+            descriptor_parts = []
+            for parameter_name, value in zip(parameter_names, combo_values):
+                spec = specs[parameter_name]
+                run_snap[str(spec["key"])] = value
+                descriptor_parts.append(f"{parameter_name}={self._format_compare_value(value)}")
+
+            policy_name = str(run_snap["policy"])
+
+            if "policy" in compared_keys:
+                policy_defaults = self._policy_default_dict(policy_name)
+                for key, default_value in policy_defaults.items():
+                    if key not in compared_keys:
+                        run_snap[key] = default_value
+
+            if policy_name in CONTINUOUS_POLICIES:
+                run_snap["continous"] = True
+            else:
+                run_snap["continous"] = False
+
+            run_snap["compare_descriptor"] = " | ".join(descriptor_parts)
+            run_configs.append(run_snap)
+
+        return run_configs
+
+    def _select_compare_render_run(self) -> None:
+        selected_policy = self.policy_var.get()
+        matching = [
+            key
+            for key, meta in self._compare_run_meta.items()
+            if str(meta.get("policy", "")) == selected_policy and key in self._policy_trainers
+        ]
+        target = matching[0] if matching else next(iter(self._policy_trainers.keys()), None)
+        if target is None:
+            return
+        self._compare_selected_run_key = target
+        self._selected_render_trainer = self._policy_trainers[target]
+
     def _apply_policy_defaults(self, policy: str) -> None:
         cfg = POLICY_DEFAULTS[policy]
         self.gamma_var.set(cfg.gamma)
-        self.learning_rate_var.set(cfg.learning_rate)
+        self.learning_rate_var.set(self._format_scientific(cfg.learning_rate))
         self.replay_size_var.set(cfg.replay_size)
         self.batch_size_var.set(cfg.batch_size)
         self.target_update_var.set(cfg.target_update)
@@ -371,8 +765,40 @@ class LunarLanderGUI:
         self.learning_cadence_var.set(cfg.learning_cadence)
         self.activation_var.set(cfg.activation_function)
         self.hidden_layers_var.set(cfg.hidden_layers)
+        self.lr_strategy_var.set(cfg.lr_strategy)
+        self.lr_decay_var.set(cfg.lr_decay)
+        self.min_learning_rate_var.set(self._format_scientific(cfg.min_learning_rate))
+        self.gae_lambda_var.set(cfg.gae_lambda)
+        self.ppo_clip_range_var.set(cfg.ppo_clip_range)
+
+    def _format_scientific(self, value: float, digits: int = 2) -> str:
+        return f"{float(value):.{int(max(0, digits))}e}"
+
+    def _normalize_scientific_var(self, var: tk.StringVar, fallback: float) -> None:
+        try:
+            value = float(var.get())
+        except Exception:
+            value = float(fallback)
+        var.set(self._format_scientific(value))
+
+    def _normalize_lr_inputs(self) -> None:
+        self._normalize_scientific_var(self.learning_rate_var, 1e-3)
+        self._normalize_scientific_var(self.min_learning_rate_var, 1e-5)
+
+    def _get_live_learning_rate(self) -> float:
+        selected_policy = self.policy_var.get()
+        trainer = self._selected_render_trainer if self._selected_render_trainer is not None else self.trainer
+        if self._compare_mode_active and self._compare_selected_run_key is not None:
+            run_meta = self._compare_run_meta.get(self._compare_selected_run_key, {})
+            selected_policy = str(run_meta.get("policy", selected_policy))
+            trainer = self._policy_trainers.get(self._compare_selected_run_key, trainer)
+        try:
+            return float(trainer.get_current_learning_rate(selected_policy))
+        except Exception:
+            return float(self.learning_rate_var.get())
 
     def _snapshot_ui(self) -> Dict[str, object]:
+        self._normalize_lr_inputs()
         return {
             "policy": self.policy_var.get(),
             "max_steps": max(1, int(self.max_steps_var.get())),
@@ -389,9 +815,16 @@ class LunarLanderGUI:
             "learning_cadence": max(1, int(self.learning_cadence_var.get())),
             "activation_function": self.activation_var.get(),
             "hidden_layers": self.hidden_layers_var.get(),
+            "lr_strategy": self.lr_strategy_var.get(),
+            "lr_decay": float(self.lr_decay_var.get()),
+            "min_learning_rate": max(0.0, float(self.min_learning_rate_var.get())),
+            "gae_lambda": min(1.0, max(0.0, float(self.gae_lambda_var.get()))),
+            "ppo_clip_range": min(0.5, max(0.01, float(self.ppo_clip_range_var.get()))),
             "moving_avg": max(1, int(self.moving_avg_var.get())),
             "animation_fps": max(1, int(self.animation_fps_var.get())),
+            "update_rate_episodes": max(1, int(self.update_rate_episodes_var.get())),
             "animation_on": bool(self.animation_on_var.get()),
+            "continous": bool(self.continous_var.get()),
             "gravity": float(self.gravity_var.get()),
             "enable_wind": bool(self.wind_on_var.get()),
             "wind_power": float(self.wind_power_var.get()),
@@ -411,6 +844,11 @@ class LunarLanderGUI:
             learning_cadence=snap["learning_cadence"],
             activation_function=snap["activation_function"],
             hidden_layers=snap["hidden_layers"],
+            lr_strategy=snap["lr_strategy"],
+            lr_decay=snap["lr_decay"],
+            min_learning_rate=snap["min_learning_rate"],
+            gae_lambda=snap["gae_lambda"],
+            ppo_clip_range=snap["ppo_clip_range"],
         )
 
     def update_environment(self) -> None:
@@ -420,13 +858,14 @@ class LunarLanderGUI:
         snap = self._snapshot_ui()
         self.trainer.rebuild_environment(
             snap["gravity"],
+            snap["continous"],
             snap["enable_wind"],
             snap["wind_power"],
             snap["turbulence_power"],
         )
-        self._current_x = None
-        self._best_x = None
-        self._set_status_text(snap["epsilon_max"], None, None)
+        self._best_reward = None
+        self._last_episode_steps = 0
+        self._set_status_text(snap["epsilon_max"])
         self._draw_latest_frame()
 
     def run_single_episode(self) -> None:
@@ -471,6 +910,11 @@ class LunarLanderGUI:
             "learning_cadence": data["learning_cadence"],
             "activation_function": data["activation_function"],
             "hidden_layers": data["hidden_layers"],
+            "lr_strategy": data["lr_strategy"],
+            "lr_decay": data["lr_decay"],
+            "min_learning_rate": data["min_learning_rate"],
+            "gae_lambda": data["gae_lambda"],
+            "ppo_clip_range": data["ppo_clip_range"],
         }
 
     def _set_policy_defaults_on_trainer(self, trainer: Trainer, policy: str) -> None:
@@ -482,109 +926,210 @@ class LunarLanderGUI:
                 trainer.close()
         self._policy_trainers.clear()
 
-    def _build_base_label(self, policy: str, eps_max: float, eps_min: float, learning_rate: float) -> str:
-        return f"{policy} | eps({eps_max}/{eps_min}) | lr={learning_rate}"
+    def _format_legend_number(self, value: float) -> str:
+        if not np.isfinite(value):
+            return str(value)
+        abs_value = abs(value)
+        if abs_value != 0.0 and (abs_value < 1e-3 or abs_value >= 1e3):
+            return f"{value:.2e}"
+        return f"{value:.6f}".rstrip("0").rstrip(".")
+
+    def _build_base_label(
+        self,
+        policy: str,
+        eps_max: float,
+        eps_min: float,
+        learning_rate: float,
+        lr_strategy: Optional[str] = None,
+        lr_decay: Optional[float] = None,
+        min_learning_rate: Optional[float] = None,
+    ) -> str:
+        eps_max_s = self._format_legend_number(eps_max)
+        eps_min_s = self._format_legend_number(eps_min)
+        lr_s = self._format_scientific(learning_rate)
+        label = f"{policy} | eps({eps_max_s}/{eps_min_s}) | lr={lr_s}"
+        if lr_strategy is not None:
+            label += f" | lr-strategy={lr_strategy}"
+        if lr_decay is not None:
+            label += f" | lr-decay={self._format_scientific(lr_decay)}"
+        if min_learning_rate is not None:
+            label += f" | min-lr={self._format_scientific(min_learning_rate)}"
+        return label
 
     def _start_worker(self, single_episode: bool) -> None:
+        self._drain_event_queue()
         snap = self._snapshot_ui()
+        if self._enforce_policy_environment_mode(str(snap["policy"]), show_info=True):
+            snap = self._snapshot_ui()
         if snap["compare_on"] and not single_episode:
             self._start_compare_workers(snap)
             return
 
         self._compare_mode_active = False
         self._workers.clear()
-        self._policy_trainers.clear()
+        self._close_aux_policy_trainers()
+        self._compare_selected_run_key = None
         self._selected_render_trainer = self.trainer
+        self._latest_eval_snapshot = []
         self._apply_snapshot_to_trainer(snap)
+        self._single_run_meta = {
+            "policy": str(snap["policy"]),
+            "eps_max": float(snap["epsilon_max"]),
+            "eps_min": float(snap["epsilon_min"]),
+            "learning_rate": float(snap["learning_rate"]),
+            "lr_strategy": str(snap["lr_strategy"]),
+            "lr_decay": float(snap["lr_decay"]),
+            "min_learning_rate": float(snap["min_learning_rate"]),
+            "moving_avg": int(snap["moving_avg"]),
+        }
         if not single_episode:
+            self.trainer.set_training_plan(str(snap["policy"]), int(snap["episodes"]), int(snap["max_steps"]))
             self.trainer.reset_policy_agent(str(snap["policy"]))
 
         self._stop_requested.clear()
         self._pause_requested.clear()
         self.btn_pause.configure(text="Pause")
+        self._ui_lag_last_ms = 0.0
+        self._ui_lag_max_ms = 0.0
+        self._last_ui_pump_time = time.perf_counter()
+        self._animate_current_episode = bool(snap.get("animation_on", True))
 
         self.steps_bar.configure(maximum=snap["max_steps"])
         self.episodes_bar.configure(maximum=1 if single_episode else snap["episodes"])
         self.steps_progress_var.set(0)
         self.episodes_progress_var.set(0)
-        self._best_x = None
-        self._current_x = None
-        self._set_status_text(snap["epsilon_max"], None, None)
+        self._best_reward = None
+        self._last_episode_steps = 0
+        self._set_status_text(snap["epsilon_max"])
 
         self._worker = threading.Thread(target=self._worker_loop, args=(snap, single_episode), daemon=True)
         self._worker.start()
         self._update_control_highlights()
 
     def _start_compare_workers(self, snap: Dict[str, object]) -> None:
-        policies = ["DuelingDQN", "D3QN", "DDQN+PER"]
-        selected_policy = snap["policy"]
+        try:
+            run_configs = self._build_compare_run_configs(snap)
+        except ValueError:
+            return
+        if not run_configs:
+            messagebox.showwarning("Compare mode", "No valid compare configurations found.")
+            return
+        if len(run_configs) > self._max_compare_runs:
+            messagebox.showwarning(
+                "Compare mode",
+                (
+                    f"Too many compare runs selected ({len(run_configs)}). "
+                    f"Please reduce combinations to at most {self._max_compare_runs} "
+                    "to keep the GUI responsive."
+                ),
+            )
+            return
 
         self._compare_mode_active = True
         self._workers.clear()
         self._close_aux_policy_trainers()
-        self._pending_policy_state.clear()
+        self._drain_event_queue()
         self._latest_compare_rewards = {}
+        self._latest_compare_eval_snapshots = {}
         self._compare_run_meta = {}
+        self._compare_selected_run_key = None
         self._compare_finalized_policies.clear()
         self._worker = None
+        self._compare_worker_semaphore = threading.Semaphore(self._max_parallel_compare_workers)
 
         self._stop_requested.clear()
         self._pause_requested.clear()
         self.btn_pause.configure(text="Pause")
+        self._ui_lag_last_ms = 0.0
+        self._ui_lag_max_ms = 0.0
+        self._last_ui_pump_time = time.perf_counter()
 
-        self.steps_bar.configure(maximum=snap["max_steps"])
-        self.episodes_bar.configure(maximum=snap["episodes"])
+        max_steps_max = max(int(cfg["max_steps"]) for cfg in run_configs)
+        episodes_max = max(int(cfg["episodes"]) for cfg in run_configs)
+        self.steps_bar.configure(maximum=max_steps_max)
+        self.episodes_bar.configure(maximum=episodes_max)
         self.steps_progress_var.set(0)
         self.episodes_progress_var.set(0)
-        self._best_x = None
-        self._current_x = None
-        self._set_status_text(snap["epsilon_max"], None, None)
+        self._best_reward = None
+        self._last_episode_steps = 0
+        self._set_status_text(snap["epsilon_max"])
 
-        self.trainer.rebuild_environment(
-            snap["gravity"],
-            snap["enable_wind"],
-            snap["wind_power"],
-            snap["turbulence_power"],
-        )
-
-        for policy in policies:
-            if policy == selected_policy:
+        for idx, run_snap in enumerate(run_configs, start=1):
+            run_key = f"run-{idx}"
+            policy = str(run_snap["policy"])
+            if idx == 1:
                 trainer = self.trainer
             else:
                 trainer = Trainer()
                 trainer.rebuild_environment(
-                    snap["gravity"],
-                    snap["enable_wind"],
-                    snap["wind_power"],
-                    snap["turbulence_power"],
+                    run_snap["gravity"],
+                    run_snap["continous"],
+                    run_snap["enable_wind"],
+                    run_snap["wind_power"],
+                    run_snap["turbulence_power"],
                 )
 
-            self._set_policy_defaults_on_trainer(trainer, policy)
+            trainer.rebuild_environment(
+                run_snap["gravity"],
+                run_snap["continous"],
+                run_snap["enable_wind"],
+                run_snap["wind_power"],
+                run_snap["turbulence_power"],
+            )
+
+            trainer.set_policy_config(
+                policy,
+                gamma=run_snap["gamma"],
+                learning_rate=run_snap["learning_rate"],
+                replay_size=run_snap["replay_size"],
+                batch_size=run_snap["batch_size"],
+                target_update=run_snap["target_update"],
+                replay_warmup=run_snap["replay_warmup"],
+                learning_cadence=run_snap["learning_cadence"],
+                activation_function=run_snap["activation_function"],
+                hidden_layers=run_snap["hidden_layers"],
+                lr_strategy=run_snap["lr_strategy"],
+                lr_decay=run_snap["lr_decay"],
+                min_learning_rate=run_snap["min_learning_rate"],
+                gae_lambda=run_snap["gae_lambda"],
+                ppo_clip_range=run_snap["ppo_clip_range"],
+            )
+            trainer.set_training_plan(policy, int(run_snap["episodes"]), int(run_snap["max_steps"]))
             trainer.reset_policy_agent(policy)
             cfg = trainer.get_policy_config(policy)
-            self._compare_run_meta[policy] = {
-                "eps_max": float(snap["epsilon_max"]),
-                "eps_min": float(snap["epsilon_min"]),
+            self._compare_run_meta[run_key] = {
+                "policy": policy,
+                "eps_max": float(run_snap["epsilon_max"]),
+                "eps_min": float(run_snap["epsilon_min"]),
                 "learning_rate": float(cfg.learning_rate),
-                "moving_avg": float(snap["moving_avg"]),
+                "lr_strategy": str(cfg.lr_strategy),
+                "lr_decay": float(cfg.lr_decay),
+                "min_learning_rate": float(cfg.min_learning_rate),
+                "moving_avg": float(run_snap["moving_avg"]),
+                "compare_descriptor": str(run_snap.get("compare_descriptor", "")),
             }
-            self._latest_compare_rewards[policy] = []
-            self._policy_trainers[policy] = trainer
+            self._latest_compare_rewards[run_key] = []
+            self._latest_compare_eval_snapshots[run_key] = []
+            self._policy_trainers[run_key] = trainer
 
-            thread = threading.Thread(target=self._compare_worker_loop, args=(policy, trainer, snap), daemon=True)
-            self._workers[policy] = thread
+            thread = threading.Thread(target=self._compare_worker_loop, args=(run_key, policy, trainer, run_snap), daemon=True)
+            self._workers[run_key] = thread
             thread.start()
 
-        self._selected_render_trainer = self._policy_trainers.get(selected_policy, self.trainer)
-        self._worker = self._workers.get(selected_policy)
+        self._select_compare_render_run()
+        if self._compare_selected_run_key:
+            self._worker = self._workers.get(self._compare_selected_run_key)
         self._update_live_plot()
         self._update_control_highlights()
 
     def _worker_loop(self, snap: Dict[str, object], single_episode: bool) -> None:
         policy = snap["policy"]
         episodes = 1 if single_episode else snap["episodes"]
+        update_rate = max(1, int(snap.get("update_rate_episodes", 10)))
         epsilon = float(snap["epsilon_max"])
         rewards: List[float] = []
+        eval_points: List[tuple[int, float]] = []
+        run_meta = dict(self._single_run_meta)
 
         for episode in range(1, episodes + 1):
             if self._stop_requested.is_set():
@@ -593,164 +1138,368 @@ class LunarLanderGUI:
                 time.sleep(0.05)
             if self._stop_requested.is_set():
                 break
+
+            should_refresh = single_episode or (episode % update_rate == 0) or (episode == episodes)
+            animate_episode = bool(snap.get("animation_on", True)) and should_refresh
+            self._set_pending(episode=episode, animate_episode=animate_episode)
+            progress_cb = None
+            if bool(snap.get("animation_on", True)) and should_refresh:
+                progress_cb = lambda step, ep=episode: self._emit_single_step(
+                    _StepEventPayload(step=int(step), episode=int(ep))
+                )
 
             result = self.trainer.run_episode(
                 policy,
                 epsilon=epsilon,
                 max_steps=int(snap["max_steps"]),
-                progress_callback=lambda step: self._set_pending(step=step, episode=episode),
+                progress_callback=progress_cb,
             )
             reward = float(result["reward"])
             rewards.append(reward)
-            final_state = result.get("final_state")
-            current_x = float(final_state[0]) if final_state is not None and len(final_state) > 0 else None
-            best_x = float(result.get("best_x", np.nan))
+            steps_last_episode = int(result["steps"])
+            best_reward = float(max(rewards))
 
-            self._set_pending(
-                step=int(result["steps"]),
-                episode=episode,
-                epsilon=epsilon,
-                current_x=current_x,
-                best_x=best_x,
-                rewards_snapshot=list(rewards),
+            episode_payload = _EpisodeEndPayload(
+                episode=int(episode),
+                epsilon=float(epsilon),
+                last_episode_steps=int(steps_last_episode),
+                best_reward=float(best_reward),
+                animate_episode=bool(animate_episode),
+                rewards_snapshot=list(rewards) if should_refresh else None,
+                run_meta=dict(run_meta) if should_refresh else None,
             )
+            self._emit_single_episode_end(episode_payload)
+
+            if not single_episode and self._eval_interval > 0 and episode % int(self._eval_interval) == 0:
+                eval_result = self.trainer.evaluate_policy(
+                    policy=str(policy),
+                    max_steps=int(snap["max_steps"]),
+                    episodes=int(self._eval_episodes),
+                    seed_base=int(self._eval_seed_base + episode * 100),
+                )
+                eval_points.append((int(episode), float(eval_result["mean_reward"])))
+                self._set_pending(eval_snapshot=list(eval_points))
+
             epsilon = max(float(snap["epsilon_min"]), epsilon * float(snap["epsilon_decay"]))
 
-        self._set_pending(finalize_run=True, rewards_snapshot=list(rewards), finished=True, epsilon=epsilon)
+        self._emit_single_finalize(
+            _FinalizePayload(
+                rewards_snapshot=list(rewards),
+                eval_snapshot=list(eval_points),
+                finished=True,
+                epsilon=float(epsilon),
+                run_meta=dict(run_meta),
+            )
+        )
 
-    def _compare_worker_loop(self, policy: str, trainer: Trainer, snap: Dict[str, object]) -> None:
+    def _compare_worker_loop(self, run_key: str, policy: str, trainer: Trainer, snap: Dict[str, object]) -> None:
         episodes = snap["episodes"]
+        update_rate = max(1, int(snap.get("update_rate_episodes", 10)))
         epsilon = float(snap["epsilon_max"])
         rewards: List[float] = []
+        eval_points: List[tuple[int, float]] = []
 
-        for episode in range(1, episodes + 1):
-            if self._stop_requested.is_set():
-                break
-            while self._pause_requested.is_set() and not self._stop_requested.is_set():
-                time.sleep(0.05)
-            if self._stop_requested.is_set():
-                break
+        with self._compare_worker_semaphore:
+            for episode in range(1, episodes + 1):
+                if self._stop_requested.is_set():
+                    break
+                while self._pause_requested.is_set() and not self._stop_requested.is_set():
+                    time.sleep(0.05)
+                if self._stop_requested.is_set():
+                    break
 
-            result = trainer.run_episode(
-                policy,
-                epsilon=epsilon,
-                max_steps=int(snap["max_steps"]),
-                progress_callback=lambda step, p=policy: self._set_policy_pending(p, step=step, episode=episode),
-            )
-            reward = float(result["reward"])
-            rewards.append(reward)
-            final_state = result.get("final_state")
-            current_x = float(final_state[0]) if final_state is not None and len(final_state) > 0 else None
-            best_x = float(result.get("best_x", np.nan))
+                should_refresh = (episode % update_rate == 0) or (episode == episodes)
+                animate_episode = bool(snap.get("animation_on", True)) and should_refresh
+                self._set_policy_pending(run_key, episode=episode, animate_episode=animate_episode)
+                progress_cb = None
+                if bool(snap.get("animation_on", True)) and should_refresh:
+                    progress_cb = lambda step, key=run_key, ep=episode: self._emit_policy_step(
+                        key,
+                        _StepEventPayload(step=int(step), episode=int(ep)),
+                    )
 
-            self._set_policy_pending(
-                policy,
-                step=int(result["steps"]),
-                episode=episode,
-                epsilon=epsilon,
-                current_x=current_x,
-                best_x=best_x,
+                result = trainer.run_episode(
+                    policy,
+                    epsilon=epsilon,
+                    max_steps=int(snap["max_steps"]),
+                    progress_callback=progress_cb,
+                )
+                reward = float(result["reward"])
+                rewards.append(reward)
+                steps_last_episode = int(result["steps"])
+                best_reward = float(max(rewards))
+
+                episode_payload = _EpisodeEndPayload(
+                    episode=int(episode),
+                    epsilon=float(epsilon),
+                    last_episode_steps=int(steps_last_episode),
+                    best_reward=float(best_reward),
+                    animate_episode=bool(animate_episode),
+                    rewards_snapshot=list(rewards) if should_refresh else None,
+                    run_meta=None,
+                )
+                self._emit_policy_episode_end(run_key, episode_payload)
+
+                if self._eval_interval > 0 and episode % int(self._eval_interval) == 0:
+                    eval_result = trainer.evaluate_policy(
+                        policy=str(policy),
+                        max_steps=int(snap["max_steps"]),
+                        episodes=int(self._eval_episodes),
+                        seed_base=int(self._eval_seed_base + episode * 100),
+                    )
+                    eval_points.append((int(episode), float(eval_result["mean_reward"])))
+                    self._set_policy_pending(run_key, eval_snapshot=list(eval_points))
+
+                epsilon = max(float(snap["epsilon_min"]), epsilon * float(snap["epsilon_decay"]))
+
+        self._emit_policy_finalize(
+            run_key,
+            _FinalizePayload(
                 rewards_snapshot=list(rewards),
-            )
-            epsilon = max(float(snap["epsilon_min"]), epsilon * float(snap["epsilon_decay"]))
+                eval_snapshot=list(eval_points),
+                finished=True,
+                epsilon=float(epsilon),
+                run_meta=None,
+            ),
+        )
 
-        self._set_policy_pending(policy, finalize_run=True, rewards_snapshot=list(rewards), finished=True, epsilon=epsilon)
+    def _emit_single_step(self, payload: _StepEventPayload) -> None:
+        self._event_queue.put(
+            _WorkerUiEvent(channel="single", payload=payload.to_payload(), event_type=_UiEventType.STEP.value)
+        )
+
+    def _emit_single_episode_end(self, payload: _EpisodeEndPayload) -> None:
+        self._event_queue.put(
+            _WorkerUiEvent(channel="single", payload=payload.to_payload(), event_type=_UiEventType.EPISODE_END.value)
+        )
+
+    def _emit_single_finalize(self, payload: _FinalizePayload) -> None:
+        self._event_queue.put(
+            _WorkerUiEvent(channel="single", payload=payload.to_payload(), event_type=_UiEventType.FINALIZE.value)
+        )
+
+    def _emit_policy_step(self, run_key: str, payload: _StepEventPayload) -> None:
+        self._event_queue.put(
+            _WorkerUiEvent(
+                channel="policy",
+                run_key=run_key,
+                payload=payload.to_payload(),
+                event_type=_UiEventType.STEP.value,
+            )
+        )
+
+    def _emit_policy_episode_end(self, run_key: str, payload: _EpisodeEndPayload) -> None:
+        self._event_queue.put(
+            _WorkerUiEvent(
+                channel="policy",
+                run_key=run_key,
+                payload=payload.to_payload(),
+                event_type=_UiEventType.EPISODE_END.value,
+            )
+        )
+
+    def _emit_policy_finalize(self, run_key: str, payload: _FinalizePayload) -> None:
+        self._event_queue.put(
+            _WorkerUiEvent(
+                channel="policy",
+                run_key=run_key,
+                payload=payload.to_payload(),
+                event_type=_UiEventType.FINALIZE.value,
+            )
+        )
 
     def _set_pending(self, **kwargs) -> None:
-        with self._pending_lock:
-            self._pending_state.update(kwargs)
+        self._event_queue.put(
+            _WorkerUiEvent(channel="single", payload=dict(kwargs), event_type=_UiEventType.MISC.value)
+        )
 
-    def _set_policy_pending(self, policy: str, **kwargs) -> None:
-        with self._pending_lock:
-            if policy not in self._pending_policy_state:
-                self._pending_policy_state[policy] = {}
-            self._pending_policy_state[policy].update(kwargs)
+    def _set_policy_pending(self, run_key: str, **kwargs) -> None:
+        self._event_queue.put(
+            _WorkerUiEvent(
+                channel="policy",
+                run_key=run_key,
+                payload=dict(kwargs),
+                event_type=_UiEventType.MISC.value,
+            )
+        )
+
+    def _drain_event_queue(self) -> None:
+        while True:
+            try:
+                self._event_queue.get_nowait()
+            except queue.Empty:
+                break
 
     def _ui_pump(self) -> None:
-        pending = None
-        pending_policy = None
-        with self._pending_lock:
-            if self._pending_state:
-                pending = dict(self._pending_state)
-                self._pending_state.clear()
-            if self._pending_policy_state:
-                pending_policy = {k: dict(v) for k, v in self._pending_policy_state.items()}
-                self._pending_policy_state.clear()
+        now = time.perf_counter()
+        elapsed_ms = max(0.0, (now - self._last_ui_pump_time) * 1000.0)
+        lag_ms = max(0.0, elapsed_ms - self._ui_pump_interval_ms)
+        self._ui_lag_last_ms = lag_ms
+        self._ui_lag_max_ms = max(self._ui_lag_max_ms, lag_ms)
+        self._last_ui_pump_time = now
+
+        single_by_type: Dict[str, Dict[str, object]] = {}
+        policy_by_type: Dict[str, Dict[str, Dict[str, object]]] = {}
+
+        merge_order = [
+            _UiEventType.STEP.value,
+            _UiEventType.EPISODE_END.value,
+            _UiEventType.FINALIZE.value,
+            _UiEventType.MISC.value,
+        ]
+
+        while True:
+            try:
+                event = self._event_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            if event.channel == "single":
+                event_key = event.event_type if event.event_type in merge_order else _UiEventType.MISC.value
+                if event_key not in single_by_type:
+                    single_by_type[event_key] = {}
+                single_by_type[event_key].update(event.payload)
+                continue
+
+            if event.channel == "policy" and event.run_key is not None:
+                event_key = event.event_type if event.event_type in merge_order else _UiEventType.MISC.value
+                if event.run_key not in policy_by_type:
+                    policy_by_type[event.run_key] = {}
+                if event_key not in policy_by_type[event.run_key]:
+                    policy_by_type[event.run_key][event_key] = {}
+                policy_by_type[event.run_key][event_key].update(event.payload)
+
+        pending: Optional[Dict[str, object]] = None
+        for event_key in merge_order:
+            payload = single_by_type.get(event_key)
+            if payload:
+                if pending is None:
+                    pending = {}
+                pending.update(payload)
+
+        pending_policy: Dict[str, Dict[str, object]] = {}
+        for run_key, typed_map in policy_by_type.items():
+            merged_payload: Dict[str, object] = {}
+            for event_key in merge_order:
+                payload = typed_map.get(event_key)
+                if payload:
+                    merged_payload.update(payload)
+            if merged_payload:
+                pending_policy[run_key] = merged_payload
+
         if pending:
             self._consume_pending(pending)
         if pending_policy:
             self._consume_policy_pending(pending_policy)
         if self._compare_mode_active and not self._has_active_workers():
             self._compare_mode_active = False
+            self._compare_selected_run_key = None
+            self._selected_render_trainer = self.trainer
             self.btn_pause.configure(text="Pause")
             self._update_control_highlights()
-        self.root.after(40, self._ui_pump)
+        self.root.after(int(self._ui_pump_interval_ms), self._ui_pump)
 
     def _consume_pending(self, pending: Dict[str, object]) -> None:
-        plot_interval = 0.30 if self._compare_mode_active else 0.15
+        plot_interval = self._compare_plot_interval() if self._compare_mode_active else self._single_plot_interval()
         if "step" in pending:
             self.steps_progress_var.set(float(pending["step"]))
             self._latest_step = int(pending["step"])
         if "episode" in pending:
             self.episodes_progress_var.set(float(pending["episode"]))
             self._latest_episode = int(pending["episode"])
-        if "current_x" in pending:
-            self._current_x = pending["current_x"]
-        if "best_x" in pending:
-            if pending["best_x"] is not None:
-                self._best_x = pending["best_x"]
+        if "best_reward" in pending:
+            self._best_reward = float(pending["best_reward"])
+        if "last_episode_steps" in pending:
+            self._last_episode_steps = int(pending["last_episode_steps"])
         if "epsilon" in pending:
-            self._set_status_text(float(pending["epsilon"]), self._current_x, self._best_x)
+            self._set_status_text(float(pending["epsilon"]))
+        if "animate_episode" in pending:
+            self._animate_current_episode = bool(pending["animate_episode"])
 
         if "rewards_snapshot" in pending:
             self._latest_rewards_snapshot = list(pending["rewards_snapshot"])
             now = time.time()
             if now - self._last_plot_update >= plot_interval:
-                self._update_live_plot()
+                self._update_live_plot(pending.get("run_meta") if isinstance(pending.get("run_meta"), dict) else None)
                 self._last_plot_update = now
 
+        if "eval_snapshot" in pending:
+            self._latest_eval_snapshot = [
+                (int(ep), float(val)) for ep, val in list(pending["eval_snapshot"])
+            ]
+
         if pending.get("finalize_run"):
-            self._finalize_run(self._latest_rewards_snapshot or [])
+            run_meta = pending.get("run_meta") if isinstance(pending.get("run_meta"), dict) else None
+            eval_points = list(getattr(self, "_latest_eval_snapshot", []))
+            try:
+                self._finalize_run(self._latest_rewards_snapshot or [], meta=run_meta, eval_points=eval_points)
+            except TypeError:
+                self._finalize_run(self._latest_rewards_snapshot or [], meta=run_meta)
 
         if pending.get("finished"):
             self.btn_pause.configure(text="Pause")
             self._update_control_highlights()
 
     def _consume_policy_pending(self, pending_policy: Dict[str, Dict[str, object]]) -> None:
-        selected_policy = self.policy_var.get()
-        plot_interval = 0.30 if self._compare_mode_active else 0.15
-        for policy, pending in pending_policy.items():
+        selected_run_key = self._compare_selected_run_key
+        plot_interval = self._compare_plot_interval() if self._compare_mode_active else self._single_plot_interval()
+        for run_key, pending in pending_policy.items():
             if "rewards_snapshot" in pending:
-                self._latest_compare_rewards[policy] = list(pending["rewards_snapshot"])
-            if policy == selected_policy:
+                self._latest_compare_rewards[run_key] = list(pending["rewards_snapshot"])
+            if "eval_snapshot" in pending:
+                self._latest_compare_eval_snapshots[run_key] = [
+                    (int(ep), float(val)) for ep, val in list(pending["eval_snapshot"])
+                ]
+            if run_key == selected_run_key:
                 if "step" in pending:
                     self.steps_progress_var.set(float(pending["step"]))
                     self._latest_step = int(pending["step"])
                 if "episode" in pending:
                     self.episodes_progress_var.set(float(pending["episode"]))
                     self._latest_episode = int(pending["episode"])
-                if "current_x" in pending:
-                    self._current_x = pending["current_x"]
-                if "best_x" in pending and pending["best_x"] is not None:
-                    self._best_x = pending["best_x"]
+                if "best_reward" in pending:
+                    self._best_reward = float(pending["best_reward"])
+                if "last_episode_steps" in pending:
+                    self._last_episode_steps = int(pending["last_episode_steps"])
                 if "epsilon" in pending:
-                    self._set_status_text(float(pending["epsilon"]), self._current_x, self._best_x)
+                    self._set_status_text(float(pending["epsilon"]))
+                if "animate_episode" in pending:
+                    self._animate_current_episode = bool(pending["animate_episode"])
 
-            if pending.get("finalize_run") and policy not in self._compare_finalized_policies:
-                rewards = self._latest_compare_rewards.get(policy, [])
-                self._finalize_run_for_policy(policy, rewards)
-                self._compare_finalized_policies.add(policy)
-                self._latest_compare_rewards.pop(policy, None)
+            if pending.get("finalize_run") and run_key not in self._compare_finalized_policies:
+                rewards = self._latest_compare_rewards.get(run_key, [])
+                eval_snapshots = getattr(self, "_latest_compare_eval_snapshots", {})
+                eval_points = eval_snapshots.get(run_key, [])
+                try:
+                    self._finalize_run_for_policy(run_key, rewards, eval_points=eval_points)
+                except TypeError:
+                    self._finalize_run_for_policy(run_key, rewards)
+                self._compare_finalized_policies.add(run_key)
+                self._latest_compare_rewards.pop(run_key, None)
+                if hasattr(self, "_latest_compare_eval_snapshots"):
+                    self._latest_compare_eval_snapshots.pop(run_key, None)
+                if run_key == self._compare_selected_run_key:
+                    self._select_compare_render_run()
 
         now = time.time()
         if now - self._last_plot_update >= plot_interval and self._latest_compare_rewards:
             self._update_live_plot()
             self._last_plot_update = now
 
-    def _set_status_text(self, epsilon: float, current_x, best_x) -> None:
-        cur = "n/a" if current_x is None else f"{float(current_x):.3f}"
-        best = "n/a" if best_x is None else f"{float(best_x):.3f}"
-        self.status_var.set(f"Epsilon: {epsilon:.4f} | Current x: {cur} | Best x: {best}")
+    def _set_status_text(self, epsilon: float) -> None:
+        best_reward = "n/a" if self._best_reward is None else f"{float(self._best_reward):.2f}"
+        lr = self._get_live_learning_rate()
+        if not bool(self.animation_on_var.get()):
+            render_status = "off"
+        elif self._has_active_workers():
+            render_status = "on" if self._animate_current_episode else "skipped"
+        else:
+            render_status = "idle"
+        self.status_var.set(
+            f"Epsilon: {epsilon:.4f} | LR: {self._format_scientific(lr, digits=6)} | "
+            f"Best reward: {best_reward} | "
+            f"Render: {render_status}"
+        )
 
     def _update_control_highlights(self) -> None:
         running = self._has_active_workers()
@@ -770,19 +1519,22 @@ class LunarLanderGUI:
     def _moving_average(self, values: List[float], window: int) -> List[float]:
         if not values:
             return []
-        arr = np.asarray(values, dtype=np.float32)
-        out = []
-        for i in range(len(arr)):
-            start = max(0, i - window + 1)
-            out.append(float(arr[start : i + 1].mean()))
-        return out
+        arr = np.asarray(values, dtype=np.float64)
+        w = max(1, int(window))
+        csum = np.cumsum(arr)
+        out = np.empty_like(arr)
+        for i in range(arr.size):
+            start = max(0, i - w + 1)
+            total = csum[i] - (csum[start - 1] if start > 0 else 0.0)
+            out[i] = total / float(i - start + 1)
+        return out.astype(np.float32).tolist()
 
-    def _update_live_plot(self) -> None:
+    def _update_live_plot(self, run_meta: Optional[Dict[str, object]] = None) -> None:
         if self._compare_mode_active:
             preview_active = {
-                policy: rewards
-                for policy, rewards in self._latest_compare_rewards.items()
-                if policy not in self._compare_finalized_policies
+                run_key: rewards
+                for run_key, rewards in self._latest_compare_rewards.items()
+                if run_key not in self._compare_finalized_policies
             }
             if not preview_active:
                 self._clear_compare_preview_lines()
@@ -793,7 +1545,7 @@ class LunarLanderGUI:
         if self._latest_rewards_snapshot is None:
             return
         rewards = self._latest_rewards_snapshot
-        self._update_single_preview(rewards)
+        self._update_single_preview(rewards, run_meta)
 
     def _clear_single_preview_lines(self) -> None:
         if self._preview_single_lines is None:
@@ -816,8 +1568,8 @@ class LunarLanderGUI:
                     pass
         self._preview_compare_lines.clear()
 
-    def _remove_compare_preview_policy(self, policy: str) -> None:
-        pair = self._preview_compare_lines.pop(policy, None)
+    def _remove_compare_preview_policy(self, run_key: str) -> None:
+        pair = self._preview_compare_lines.pop(run_key, None)
         if not pair:
             return
         for line in pair:
@@ -826,10 +1578,11 @@ class LunarLanderGUI:
             except Exception:
                 pass
 
-    def _autoscale_plot(self) -> None:
+    def _autoscale_plot(self, refresh_legend: bool = True) -> None:
         self.ax.relim()
         self.ax.autoscale_view()
-        self._refresh_legend()
+        if refresh_legend:
+            self._refresh_legend()
         self.plot_canvas.draw_idle()
 
     def _refresh_legend(self) -> None:
@@ -867,83 +1620,90 @@ class LunarLanderGUI:
             leg_text.set_color("#d4d4d4")
             self._legend_map[leg_text] = line
 
-    def _update_single_preview(self, rewards: List[float]) -> None:
+    def _update_single_preview(self, rewards: List[float], run_meta: Optional[Dict[str, object]] = None) -> None:
         self._clear_compare_preview_lines()
         x = list(range(1, len(rewards) + 1))
-        snap = self._snapshot_ui()
-        base = self._build_base_label(snap["policy"], snap["epsilon_max"], snap["epsilon_min"], snap["learning_rate"])
-        ma = self._moving_average(rewards, int(snap["moving_avg"]))
+        snap = run_meta if run_meta else (self._single_run_meta if self._single_run_meta else self._snapshot_ui())
+        base = self._build_base_label(
+            str(snap.get("policy", self.policy_var.get())),
+            float(snap.get("eps_max", snap.get("epsilon_max", self.epsilon_max_var.get()))),
+            float(snap.get("eps_min", snap.get("epsilon_min", self.epsilon_min_var.get()))),
+            float(snap.get("learning_rate", self.learning_rate_var.get())),
+            str(snap.get("lr_strategy", self.lr_strategy_var.get())),
+            float(snap.get("lr_decay", self.lr_decay_var.get())),
+            float(snap.get("min_learning_rate", self.min_learning_rate_var.get())),
+        )
+        ma = self._moving_average(rewards, int(snap.get("moving_avg", self.moving_avg_var.get())))
+        legend_dirty = False
         if self._preview_single_lines is None:
             reward_line, = self.ax.plot(x, rewards, alpha=0.4, linewidth=1.0, label=f"{base} | reward")
             ma_line, = self.ax.plot(x, ma, alpha=1.0, linewidth=2.2, color=reward_line.get_color(), label=f"{base} | MA")
             self._preview_single_lines = (reward_line, ma_line)
+            legend_dirty = True
         else:
             reward_line, ma_line = self._preview_single_lines
             reward_line.set_data(x, rewards)
             ma_line.set_data(x, ma)
             reward_line.set_label(f"{base} | reward")
             ma_line.set_label(f"{base} | MA")
-        self._autoscale_plot()
+        self._autoscale_plot(refresh_legend=legend_dirty)
 
     def _update_compare_preview(self, preview_active: Dict[str, List[float]]) -> None:
         self._clear_single_preview_lines()
+        legend_dirty = False
 
-        stale = [policy for policy in self._preview_compare_lines if policy not in preview_active]
-        for policy in stale:
-            self._remove_compare_preview_policy(policy)
+        stale = [run_key for run_key in self._preview_compare_lines if run_key not in preview_active]
+        for run_key in stale:
+            self._remove_compare_preview_policy(run_key)
+            legend_dirty = True
 
-        for policy, rewards in preview_active.items():
+        for run_key, rewards in preview_active.items():
             x = list(range(1, len(rewards) + 1))
-            meta = self._compare_run_meta.get(policy, {})
-            eps_max = float(meta.get("eps_max", self.epsilon_max_var.get()))
-            eps_min = float(meta.get("eps_min", self.epsilon_min_var.get()))
-            lr = float(meta.get("learning_rate", self.learning_rate_var.get()))
-            base = self._build_base_label(policy, eps_max, eps_min, lr)
-            ma_window = int(meta.get("moving_avg", self.moving_avg_var.get()))
+            meta = self._compare_run_meta.get(run_key, {})
+            policy = str(meta["policy"]) if "policy" in meta else self.policy_var.get()
+            eps_max = float(meta["eps_max"]) if "eps_max" in meta else self.epsilon_max_var.get()
+            eps_min = float(meta["eps_min"]) if "eps_min" in meta else self.epsilon_min_var.get()
+            lr = float(meta["learning_rate"]) if "learning_rate" in meta else self.learning_rate_var.get()
+            lr_strategy = str(meta["lr_strategy"]) if "lr_strategy" in meta else self.lr_strategy_var.get()
+            lr_decay = float(meta["lr_decay"]) if "lr_decay" in meta else self.lr_decay_var.get()
+            min_lr = float(meta["min_learning_rate"]) if "min_learning_rate" in meta else self.min_learning_rate_var.get()
+            base = self._build_base_label(policy, eps_max, eps_min, lr, lr_strategy, lr_decay, min_lr)
+            descriptor = str(meta.get("compare_descriptor", "")).strip()
+            if descriptor:
+                base = f"{base} | {descriptor}"
+            ma_window = int(meta["moving_avg"]) if "moving_avg" in meta else self.moving_avg_var.get()
             ma = self._moving_average(rewards, ma_window)
 
-            if policy not in self._preview_compare_lines:
+            if run_key not in self._preview_compare_lines:
                 reward_line, = self.ax.plot(x, rewards, alpha=0.4, linewidth=1.0, label=f"{base} | reward")
                 ma_line, = self.ax.plot(x, ma, alpha=1.0, linewidth=2.2, color=reward_line.get_color(), label=f"{base} | MA")
-                self._preview_compare_lines[policy] = (reward_line, ma_line)
+                self._preview_compare_lines[run_key] = (reward_line, ma_line)
+                legend_dirty = True
             else:
-                reward_line, ma_line = self._preview_compare_lines[policy]
+                reward_line, ma_line = self._preview_compare_lines[run_key]
                 reward_line.set_data(x, rewards)
                 ma_line.set_data(x, ma)
                 reward_line.set_label(f"{base} | reward")
                 ma_line.set_label(f"{base} | MA")
 
-        self._autoscale_plot()
+        self._autoscale_plot(refresh_legend=legend_dirty)
 
-    def _finalize_run(self, rewards: List[float]) -> None:
+    def _finalize_run(self, rewards: List[float], meta: Optional[Dict[str, object]] = None, eval_points: Optional[List[tuple[int, float]]] = None) -> None:
         if not rewards:
             return
         self._clear_single_preview_lines()
-        snap = self._snapshot_ui()
-        base_label = self._build_base_label(snap["policy"], snap["epsilon_max"], snap["epsilon_min"], snap["learning_rate"])
+        run_meta = meta if meta else (self._single_run_meta or {})
+        policy = str(run_meta.get("policy", self.policy_var.get()))
+        eps_max = float(run_meta.get("eps_max", self.epsilon_max_var.get()))
+        eps_min = float(run_meta.get("eps_min", self.epsilon_min_var.get()))
+        lr = float(run_meta.get("learning_rate", self.learning_rate_var.get()))
+        lr_strategy = str(run_meta.get("lr_strategy", self.lr_strategy_var.get()))
+        lr_decay = float(run_meta.get("lr_decay", self.lr_decay_var.get()))
+        min_lr = float(run_meta.get("min_learning_rate", self.min_learning_rate_var.get()))
+        ma_window = int(run_meta.get("moving_avg", self.moving_avg_var.get()))
+        base_label = self._build_base_label(policy, eps_max, eps_min, lr, lr_strategy, lr_decay, min_lr)
         self._run_counter += 1
-        self._plot_runs.append(
-            {
-                "id": self._run_counter,
-                "base": base_label,
-                "policy": snap["policy"],
-                "rewards": list(rewards),
-                "ma": self._moving_average(list(rewards), int(snap["moving_avg"])),
-            }
-        )
-        self._redraw_plot()
-
-    def _finalize_run_for_policy(self, policy: str, rewards: List[float]) -> None:
-        if not rewards:
-            return
-        self._remove_compare_preview_policy(policy)
-        meta = self._compare_run_meta.get(policy, {})
-        eps_max = float(meta.get("eps_max", self.epsilon_max_var.get()))
-        eps_min = float(meta.get("eps_min", self.epsilon_min_var.get()))
-        lr = float(meta.get("learning_rate", self.learning_rate_var.get()))
-        ma_window = int(meta.get("moving_avg", self.moving_avg_var.get()))
-        base_label = self._build_base_label(policy, eps_max, eps_min, lr)
-        self._run_counter += 1
+        eval_pairs = list(eval_points or [])
         self._plot_runs.append(
             {
                 "id": self._run_counter,
@@ -951,6 +1711,40 @@ class LunarLanderGUI:
                 "policy": policy,
                 "rewards": list(rewards),
                 "ma": self._moving_average(list(rewards), ma_window),
+                "eval_x": [int(ep) for ep, _ in eval_pairs],
+                "eval_rewards": [float(val) for _, val in eval_pairs],
+            }
+        )
+        self._redraw_plot()
+
+    def _finalize_run_for_policy(self, run_key: str, rewards: List[float], eval_points: Optional[List[tuple[int, float]]] = None) -> None:
+        if not rewards:
+            return
+        self._remove_compare_preview_policy(run_key)
+        meta = self._compare_run_meta.get(run_key, {})
+        policy = str(meta["policy"]) if "policy" in meta else self.policy_var.get()
+        eps_max = float(meta["eps_max"]) if "eps_max" in meta else self.epsilon_max_var.get()
+        eps_min = float(meta["eps_min"]) if "eps_min" in meta else self.epsilon_min_var.get()
+        lr = float(meta["learning_rate"]) if "learning_rate" in meta else self.learning_rate_var.get()
+        lr_strategy = str(meta["lr_strategy"]) if "lr_strategy" in meta else self.lr_strategy_var.get()
+        lr_decay = float(meta["lr_decay"]) if "lr_decay" in meta else self.lr_decay_var.get()
+        min_lr = float(meta["min_learning_rate"]) if "min_learning_rate" in meta else self.min_learning_rate_var.get()
+        ma_window = int(meta["moving_avg"]) if "moving_avg" in meta else self.moving_avg_var.get()
+        base_label = self._build_base_label(policy, eps_max, eps_min, lr, lr_strategy, lr_decay, min_lr)
+        descriptor = str(meta.get("compare_descriptor", "")).strip()
+        if descriptor:
+            base_label = f"{base_label} | {descriptor}"
+        self._run_counter += 1
+        eval_pairs = list(eval_points or [])
+        self._plot_runs.append(
+            {
+                "id": self._run_counter,
+                "base": base_label,
+                "policy": policy,
+                "rewards": list(rewards),
+                "ma": self._moving_average(list(rewards), ma_window),
+                "eval_x": [int(ep) for ep, _ in eval_pairs],
+                "eval_rewards": [float(val) for _, val in eval_pairs],
             }
         )
         self._redraw_plot()
@@ -984,9 +1778,34 @@ class LunarLanderGUI:
             ma_line, = self.ax.plot(x, run["ma"], alpha=1.0, linewidth=2.2, color=color, label=f"{run['base']} | MA", picker=5)
             lines.extend([reward_line, ma_line])
 
+            eval_x = list(run.get("eval_x", []))
+            eval_rewards = list(run.get("eval_rewards", []))
+            if eval_x and eval_rewards:
+                eval_line, = self.ax.plot(
+                    eval_x,
+                    eval_rewards,
+                    alpha=0.95,
+                    linewidth=1.8,
+                    linestyle="--",
+                    marker="o",
+                    markersize=3,
+                    color=color,
+                    label=f"{run['base']} | eval",
+                    picker=5,
+                )
+                lines.append(eval_line)
+
         if preview_rewards is not None:
             snap = self._snapshot_ui()
-            base = self._build_base_label(snap["policy"], snap["epsilon_max"], snap["epsilon_min"], snap["learning_rate"])
+            base = self._build_base_label(
+                snap["policy"],
+                snap["epsilon_max"],
+                snap["epsilon_min"],
+                snap["learning_rate"],
+                str(snap["lr_strategy"]),
+                float(snap["lr_decay"]),
+                float(snap["min_learning_rate"]),
+            )
             x = list(range(1, len(preview_rewards) + 1))
             reward_line, = self.ax.plot(x, preview_rewards, alpha=0.4, linewidth=1.0, label=f"{base} | reward")
             ma = self._moving_average(preview_rewards, int(snap["moving_avg"]))
@@ -994,15 +1813,22 @@ class LunarLanderGUI:
             lines.extend([reward_line, ma_line])
 
         if preview_compare is not None:
-            for policy, rewards in preview_compare.items():
+            for run_key, rewards in preview_compare.items():
                 if not rewards:
                     continue
-                meta = self._compare_run_meta.get(policy, {})
-                eps_max = float(meta.get("eps_max", self.epsilon_max_var.get()))
-                eps_min = float(meta.get("eps_min", self.epsilon_min_var.get()))
-                lr = float(meta.get("learning_rate", self.learning_rate_var.get()))
-                ma_window = int(meta.get("moving_avg", self.moving_avg_var.get()))
-                base = self._build_base_label(policy, eps_max, eps_min, lr)
+                meta = self._compare_run_meta.get(run_key, {})
+                policy = str(meta["policy"]) if "policy" in meta else self.policy_var.get()
+                eps_max = float(meta["eps_max"]) if "eps_max" in meta else self.epsilon_max_var.get()
+                eps_min = float(meta["eps_min"]) if "eps_min" in meta else self.epsilon_min_var.get()
+                lr = float(meta["learning_rate"]) if "learning_rate" in meta else self.learning_rate_var.get()
+                lr_strategy = str(meta["lr_strategy"]) if "lr_strategy" in meta else self.lr_strategy_var.get()
+                lr_decay = float(meta["lr_decay"]) if "lr_decay" in meta else self.lr_decay_var.get()
+                min_lr = float(meta["min_learning_rate"]) if "min_learning_rate" in meta else self.min_learning_rate_var.get()
+                ma_window = int(meta["moving_avg"]) if "moving_avg" in meta else self.moving_avg_var.get()
+                base = self._build_base_label(policy, eps_max, eps_min, lr, lr_strategy, lr_decay, min_lr)
+                descriptor = str(meta.get("compare_descriptor", "")).strip()
+                if descriptor:
+                    base = f"{base} | {descriptor}"
                 x = list(range(1, len(rewards) + 1))
                 reward_line, = self.ax.plot(x, rewards, alpha=0.4, linewidth=1.0, label=f"{base} | reward")
                 ma = self._moving_average(rewards, ma_window)
@@ -1061,9 +1887,19 @@ class LunarLanderGUI:
     def _render_tick(self) -> None:
         now = time.time()
         fps = max(1, int(self.animation_fps_var.get()))
-        if self.animation_on_var.get() and now - self._last_render_update >= 1.0 / fps:
+        active_workers = self._has_active_workers()
+        effective_fps = fps
+        if active_workers and not self._compare_mode_active:
+            effective_fps = max(fps, 20)
+        if self._ui_lag_last_ms > 250.0:
+            self.root.after(50, self._render_tick)
+            return
+        if active_workers and not self._animate_current_episode:
+            self.root.after(30, self._render_tick)
+            return
+        if self.animation_on_var.get() and now - self._last_render_update >= 1.0 / effective_fps:
             should_draw = True
-            if self._has_active_workers():
+            if active_workers:
                 should_draw = not (
                     self._latest_step == self._last_rendered_step
                     and self._latest_episode == self._last_rendered_episode
@@ -1124,22 +1960,28 @@ class LunarLanderGUI:
         self._workers.clear()
         self._close_aux_policy_trainers()
         self._compare_mode_active = False
+        self._compare_selected_run_key = None
         self._latest_compare_rewards.clear()
         self._compare_finalized_policies.clear()
         self._compare_run_meta.clear()
-        self._pending_policy_state.clear()
+        self._single_run_meta.clear()
+        self._drain_event_queue()
         self._selected_render_trainer = self.trainer
         self._clear_single_preview_lines()
         self._clear_compare_preview_lines()
         self._plot_runs.clear()
         self._latest_rewards_snapshot = None
-        self._current_x = None
-        self._best_x = None
+        self._best_reward = None
+        self._last_episode_steps = 0
         self.steps_progress_var.set(0)
         self.episodes_progress_var.set(0)
         self._last_rendered_step = -1
         self._last_rendered_episode = -1
-        self._set_status_text(self.epsilon_max_var.get(), None, None)
+        self._animate_current_episode = True
+        self._ui_lag_last_ms = 0.0
+        self._ui_lag_max_ms = 0.0
+        self._last_ui_pump_time = time.perf_counter()
+        self._set_status_text(self.epsilon_max_var.get())
         self._redraw_plot()
         self._update_control_highlights()
 
