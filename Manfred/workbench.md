@@ -137,10 +137,11 @@
     - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: 2x ein Label gefolgt einem Textfeld (Episodes, Max-Steps), (Alpha, Gamma)...
 - Parameter Tuning
     - Checkbox: `Enable Tuning` (Lässt ausgewählte Methode mit allen Einstellungen zwischen Min und Max mit dem Inkrement Step parallel trainieren)
-    - Dropdown für die: Parameter-Auswahl
+    - Dropdown für die: Methoden-Parameter-Auswahl (Alpha, Gamma, Buffer-Size, Batch-Size)
     - Max
     - Min
     - Step
+    - Hidden Layers - 3 mögliche Eingabefelder für Hidden-Layer Konfigurationen, sodass sie einzeln durchlaufen und trainiert werden können (z.B. Feld1 256; Feld2 256,256; Feld3 256,256,128)
     - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: 2x ein Label gefolgt einem Textfeld
 - Methoden **Tab-Control** (für spezifische RL-Methodenparameter)
     - **Tab-Header** für die Konfiguration jeder gewählten RL-Methode
