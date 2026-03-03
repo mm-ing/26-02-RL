@@ -31,6 +31,19 @@ def _activation_from_name(name: str):
     return table.get(name, nn.ReLU)
 
 
+def _resolve_torch_device(requested: Any) -> str:
+    requested_text = str(requested or "CPU").strip().upper()
+    if requested_text != "GPU":
+        return "cpu"
+
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
 @dataclass
 class EnvironmentConfig:
     healthy_reward: float = 10.0
@@ -77,7 +90,7 @@ class SB3PolicyFactory:
                 "min_lr": 1e-5,
                 "lr_decay": 0.995,
                 "replay_size": 100000,
-                "batch_size": 256,
+                "batch_size": 128,
                 "learning_start": 0,
                 "learning_frequency": 1,
                 "target_update": 1,
@@ -91,9 +104,9 @@ class SB3PolicyFactory:
                 "lr_strategy": "constant",
                 "min_lr": 1e-5,
                 "lr_decay": 0.995,
-                "replay_size": 300000,
+                "replay_size": 500000,
                 "batch_size": 256,
-                "learning_start": 5000,
+                "learning_start": 10000,
                 "learning_frequency": 1,
                 "target_update": 1,
                 "gamma": 0.99,
@@ -101,13 +114,13 @@ class SB3PolicyFactory:
             "TD3": {
                 "hidden_layer": 256,
                 "activation": "ReLU",
-                "lr": 1e-3,
+                "lr": 3e-4,
                 "lr_strategy": "constant",
                 "min_lr": 1e-5,
                 "lr_decay": 0.995,
-                "replay_size": 300000,
+                "replay_size": 500000,
                 "batch_size": 256,
-                "learning_start": 5000,
+                "learning_start": 10000,
                 "learning_frequency": 1,
                 "target_update": 1,
                 "gamma": 0.99,
@@ -130,6 +143,7 @@ class SB3PolicyFactory:
         activation_fn = _activation_from_name(activation_name)
         learning_rate = float(params.get("lr", 3e-4))
         gamma = float(params.get("gamma", 0.99))
+        torch_device = _resolve_torch_device(params.get("device", "CPU"))
 
         policy_kwargs = dict(
             net_arch=[hidden_layer, hidden_layer],
@@ -137,7 +151,7 @@ class SB3PolicyFactory:
         )
 
         if policy_name == "PPO":
-            batch_size = int(params.get("batch_size", 256))
+            batch_size = int(params.get("batch_size", 128))
             n_steps = int(params.get("n_steps", 2048))
             if n_steps < batch_size:
                 n_steps = batch_size
@@ -150,7 +164,7 @@ class SB3PolicyFactory:
                 gamma=gamma,
                 policy_kwargs=policy_kwargs,
                 verbose=0,
-                device="cpu",
+                device=torch_device,
             )
 
         if policy_name == "SAC":
@@ -158,28 +172,28 @@ class SB3PolicyFactory:
                 "MlpPolicy",
                 env,
                 learning_rate=learning_rate,
-                buffer_size=int(params.get("replay_size", 300000)),
-                learning_starts=int(params.get("learning_start", 5000)),
+                buffer_size=int(params.get("replay_size", 500000)),
+                learning_starts=int(params.get("learning_start", 10000)),
                 batch_size=int(params.get("batch_size", 256)),
                 train_freq=int(params.get("learning_frequency", 1)),
                 gamma=gamma,
                 policy_kwargs=policy_kwargs,
                 verbose=0,
-                device="cpu",
+                device=torch_device,
             )
 
         return TD3(
             "MlpPolicy",
             env,
             learning_rate=learning_rate,
-            buffer_size=int(params.get("replay_size", 300000)),
-            learning_starts=int(params.get("learning_start", 5000)),
+            buffer_size=int(params.get("replay_size", 500000)),
+            learning_starts=int(params.get("learning_start", 10000)),
             batch_size=int(params.get("batch_size", 256)),
             train_freq=int(params.get("learning_frequency", 1)),
             gamma=gamma,
             policy_kwargs=policy_kwargs,
             verbose=0,
-            device="cpu",
+            device=torch_device,
         )
 
 
@@ -252,6 +266,7 @@ class InvertedDoublePendulumTrainer:
         frames: List[np.ndarray] = []
         transitions: List[Dict[str, Any]] = []
         executed_steps = 0
+        render_failed = False
 
         for step in range(1, max_steps + 1):
             self.pause_event.wait()
@@ -282,24 +297,32 @@ class InvertedDoublePendulumTrainer:
             if capture_rollout:
                 stride = self._stride_for_step(step)
                 if step <= self.rollout_full_capture_steps or step % stride == 0:
-                    frame = env.render()
-                    if frame is not None:
-                        frames.append(frame)
+                    try:
+                        frame = env.render()
+                        if frame is not None:
+                            frames.append(frame)
+                    except Exception:
+                        render_failed = True
+                        capture_rollout = False
 
             obs = next_obs
             if terminated or truncated:
                 break
 
         if capture_rollout and executed_steps > 0 and len(frames) == 0:
-            frame = env.render()
-            if frame is not None:
-                frames.append(frame)
+            try:
+                frame = env.render()
+                if frame is not None:
+                    frames.append(frame)
+            except Exception:
+                render_failed = True
 
         return {
             "reward": total_reward,
             "steps": executed_steps,
             "frames": frames,
             "transitions": transitions,
+            "render_failed": render_failed,
         }
 
     def evaluate_policy(self, env, episodes: int = 3) -> float:
@@ -336,13 +359,14 @@ class InvertedDoublePendulumTrainer:
                 render_mode=None,
             )
         )
-        env_wrapper = InvertedDoublePendulumEnvironment(
+        train_env_wrapper = InvertedDoublePendulumEnvironment(
             EnvironmentConfig(
                 healthy_reward=float(env_params.get("healthy_reward", 10.0)),
                 reset_noise_scale=float(env_params.get("reset_noise_scale", 0.1)),
-                render_mode="rgb_array",
+                render_mode=None,
             )
         )
+        render_env_wrapper: Optional[InvertedDoublePendulumEnvironment] = None
 
         episodes = int(general_params.get("episodes", 50))
         max_steps = int(general_params.get("max_steps", 1000))
@@ -353,7 +377,7 @@ class InvertedDoublePendulumTrainer:
         model_params = dict(specific_params)
         model_params["gamma"] = float(general_params.get("gamma", model_params.get("gamma", 0.99)))
 
-        self.model = self.policy_factory.build_model(policy_name, env_wrapper.env, model_params)
+        self.model = self.policy_factory.build_model(policy_name, train_env_wrapper.env, model_params)
 
         rewards: List[float] = []
         moving_average: List[float] = []
@@ -374,13 +398,42 @@ class InvertedDoublePendulumTrainer:
 
                 capture_rollout = self._should_capture_rollout(episode_idx, episodes)
                 rollout = self.run_episode(
-                    env=env_wrapper.env,
+                    env=train_env_wrapper.env,
                     max_steps=max_steps,
                     epsilon=0.0,
                     deterministic=True,
                     collect_transitions=False,
-                    capture_rollout=capture_rollout,
+                    capture_rollout=False,
                 )
+
+                frames: List[np.ndarray] = []
+                render_failed = False
+                if capture_rollout and self.animation_on:
+                    try:
+                        if render_env_wrapper is None:
+                            render_env_wrapper = InvertedDoublePendulumEnvironment(
+                                EnvironmentConfig(
+                                    healthy_reward=float(env_params.get("healthy_reward", 10.0)),
+                                    reset_noise_scale=float(env_params.get("reset_noise_scale", 0.1)),
+                                    render_mode="rgb_array",
+                                )
+                            )
+                    except Exception:
+                        render_failed = True
+
+                    if render_env_wrapper is not None:
+                        vis_rollout = self.run_episode(
+                            env=render_env_wrapper.env,
+                            max_steps=max_steps,
+                            epsilon=0.0,
+                            deterministic=True,
+                            collect_transitions=False,
+                            capture_rollout=True,
+                        )
+                        if vis_rollout.get("render_failed", False):
+                            render_failed = True
+                        else:
+                            frames = vis_rollout["frames"]
 
                 episode_reward = float(rollout["reward"])
                 rewards.append(episode_reward)
@@ -403,11 +456,15 @@ class InvertedDoublePendulumTrainer:
                         "moving_average": moving_average[-1],
                         "eval_points": list(eval_points),
                         "steps": int(rollout["steps"]),
-                        "frames": rollout["frames"],
+                        "frames": frames,
                         "epsilon": epsilon,
                         "lr": lr_now,
                         "best_reward": best_reward,
-                        "render_state": "on" if capture_rollout else ("off" if not self.animation_on else "skipped"),
+                        "render_state": (
+                            "skipped"
+                            if render_failed
+                            else ("on" if capture_rollout and len(frames) > 0 else ("off" if not self.animation_on else "skipped"))
+                        ),
                     },
                 )
 
@@ -430,7 +487,9 @@ class InvertedDoublePendulumTrainer:
             self._emit(event_sink, {"type": "error", "run_id": run_id, "message": str(exc)})
             raise
         finally:
-            env_wrapper.close()
+            train_env_wrapper.close()
+            if render_env_wrapper is not None:
+                render_env_wrapper.close()
             eval_env_wrapper.close()
 
     def export_transitions_csv(self, filename_prefix: str = "samplings") -> Optional[str]:

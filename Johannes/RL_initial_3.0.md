@@ -1,4 +1,4 @@
-# RL Master Blueprint (v2.0)
+# RL Master Blueprint (v2.1)
 
 ## Purpose
 This file is the **base specification** used together with a second, short project-specific file.
@@ -96,10 +96,14 @@ Implement one main GUI class with:
 
 Preferred threading bridge:
 - use a queue/event-bridge between worker threads and GUI (`after()`-driven polling)
-- publish structured events (step/episode/training-done/error) rather than direct widget calls
+- publish structured events (step/episode/training_done/error) rather than direct widget calls
 
 ### App module
 - simple entrypoint that creates `Tk()`, instantiates GUI, starts `mainloop()`.
+- set startup environment guards **before importing GUI/ML modules**:
+  - `TF_ENABLE_ONEDNN_OPTS=0`
+  - `TF_CPP_MIN_LOG_LEVEL=3`
+  to suppress noisy TensorFlow/oneDNN info logs in console launches.
 
 ---
 
@@ -112,7 +116,7 @@ Preferred threading bridge:
 - Tune per-policy defaults for the target environment (do not reuse one-size-fits-all defaults).
 - Keep on-policy settings internally consistent (for example `PPO`: use `n_steps >= batch_size` and prefer `batch_size` divisibility to avoid truncated mini-batch warnings).
 - For off-policy defaults (`SAC`/`TD3`), use realistic replay warmup and buffer sizes (larger buffer + sufficient `learning_starts`) to improve early training stability.
-- Runtime device is fixed to `CPU` for all exposed policies.
+- Runtime device is selectable as `CPU` or `GPU` for all exposed policies, with default `CPU`.
 
 Typical mapping (if used):
 - DQN-like labels -> SB3 `DQN`
@@ -135,6 +139,7 @@ Top row column ratio:
 
 ### Environment panel
 - dedicated render canvas
+- canvas background baseline: `#111111`
 - keep aspect ratio, center image
 - redraw on resize
 - render in main thread only
@@ -156,17 +161,28 @@ Top row column ratio:
 - `Animation on` (default: `True`)
 - `Animation FPS` (default: `10`)
 - `Update rate (episodes)` (default: `5`)
-- `Update` button (below top rows)
+- `Update` button
+- environment-specific parameters below `Update`:
+  - `healthy_reward`
+  - `reset_noise_scale`
 
 #### Compare group fields
 - `Compare on` toggle
-- compare parameter dropdown
-- compare values input (comma-separated)
-- `Clear` button
+- top control row: `Compare on` at left, `Clear` and `Add` buttons at right (side-by-side)
+- compare parameter dropdown (all `General` + `Specific` parameters; no `Environment` parameters)
+- compare values text input (comma-separated)
+- second row layout: `Parameter` dropdown (left) and `Values` input (right), without additional field labels
+- compare values typed suggestions + `Tab` completion for categorical params (`Policy`, `Activation`, `LR strategy`)
+- compare values completion preview hint appears below the `Values` input (for example: `Tab -> Tanh`)
 - active list summary lines: `Parameter: [v1, v2, ...]`
 
 Rules:
 - when compare is turned on, set animation off automatically (user may re-enable manually)
+- `Add` commits the selected parameter + current values text into active compare lists
+- pressing `Enter` in compare values input triggers `Add`
+- `Clear` removes all active compare parameter lists
+- compare dropdown includes all parameters from `General` and `Specific`, and excludes `Environment`
+- tab completion suggestions apply to categorical compare values and can be accepted with `Tab`
 - build Cartesian combinations across active compare parameter lists
 - if `Policy` is in compare list, start each run from that policy defaults; only explicitly compared values override
 
@@ -191,6 +207,7 @@ Rules:
 Notes:
 - learning-rate text inputs use scientific notation formatting
 - policy change applies policy defaults to relevant fields
+- within a group, input field widths are consistent (same width token)
 
 #### Live Plot group fields
 - `Moving average values` (default: `20`)
@@ -199,7 +216,7 @@ Notes:
 - when advanced section is shown: `Low-overhead animation` (default: `False`)
 
 ### Controls row
-Exactly 8 equal-width buttons (left to right):
+Exactly 8 equal-width controls (left to right):
 1. `Run single episode`
 2. `Train and Run`
 3. `Pause` / `Run`
@@ -207,28 +224,42 @@ Exactly 8 equal-width buttons (left to right):
 5. `Clear Plot`
 6. `Save samplings CSV`
 7. `Save Plot PNG`
-8. `Current device: CPU`
+8. `Device` selector (`CPU` / `GPU`, default `CPU`)
 
 Control highlight behavior:
 - `Train and Run` highlight style is shown only while a training run is active
 - `Pause/Run` highlight style is shown only while paused/activated
+- while paused, `Train and Run` must revert to neutral/default style
+- pressing `Train and Run` while paused must cancel the paused run and start a fresh run with current parameter-section values
 - inactive state uses neutral/default button styling
 
 ### Current Run panel
-- Steps progress bar
-- Episodes progress bar
+- `Steps` label + progress bar
+- `Episodes` label + progress bar
 - steps progress semantics: advances only during replay animation playback (0→100 across playback frames), not from raw episode environment step count
 - status line format:
   - `Epsilon: <...> | LR: <...> | Best reward: <...> | Render: <off|on|skipped|idle>`
 
 ### Live Plot panel
 - no title
-- plot reward and moving average with same color
-- eval checkpoints as separate style (`eval`)
+- axis labels: `x = Episodes`, `y = Reward`
+- per-episode reward line is slightly transparent (recommended `alpha ~ 0.60`)
+- `MA` and `eval` use the same color as per-episode reward
+- `MA` and `eval` use `2x` line width of per-episode reward and different styles
+- use `alpha = 1.0` for both `MA` and `eval` lines
+  - recommended: `MA` dashed (`--`), `eval` dotted (`:`) with marker
+- grid/spine/tick/label/legend text colors follow GUI text color baseline
 - legend outside right side
-- legend labels grouped per run: full parameter info shown once (reward line), with compact `MA` / `eval` entries
-- wrap long legend base labels across two lines to reduce right-side clipping
+- legend labels grouped per run: full parameter info shown once (reward line), with compact `moving average` / `evaluation rollout` entries
+- use plain legend labels `moving average` and `evaluation rollout` (no run-id suffix)
+- legend supports explicit line breaks in reward entry to prevent cutoff
+- reward legend entry format:
+  - line 1: `policy | steps=<max_steps> | gamma=<gamma>`
+  - line 2: `epsilon=<...> | epsilon_decay=<...> | epsilon_min=<...>`
+  - line 3: `LR=<...> | LR strategy=<...> | LR decay=<...>`
+  - line 4: environment-specific params (`key=value | ...`)
 - interactive legend toggling (text and handle clickable)
+- legend hover affordance: on hover, legend entry appearance changes and cursor switches to hand to indicate clickability
 - keep plot area left-aligned and reserve a fixed right gutter for legend
 - preserve previous runs until `Clear Plot`
 
@@ -241,6 +272,8 @@ Control highlight behavior:
 - periodic UI pump consumes pending updates
 - before starting a new run, flush/consume queued worker events so pending finalize data is not lost
 - starting a new run after `Pause` must preserve already finished run curves in live plot history
+- tag worker events with run/session identifiers and ignore stale events from previous/canceled runs
+- on reset/close, resume paused workers before stopping them to avoid shutdown hangs
 - render tick in main thread at configured FPS
 - no worker-side GUI drawing
 - throttled plot updates
@@ -255,7 +288,7 @@ Control highlight behavior:
 - optional fast non-render evaluation path for non-visual episodes/checkpoints
 - debounce resize-heavy UI updates (~100 ms) and avoid full relayout per configure event
 - avoid repeated expensive redraws when state/visibility did not change
-- default/runtime device should be fixed to `CPU` for all policies
+- default/runtime device should be `CPU`, with selectable `CPU`/`GPU` for all policies
 - see `Recent updates` (`2026-03-02`) for the runtime hotfix where `Animation on = False` must stop active replay immediately
 
 ### Update-rate behavior
@@ -271,6 +304,8 @@ Use `Update rate (episodes)` as gating interval:
 ## Compare mode behavior
 - each combination is one run
 - execute compare combinations with bounded parallel training (max `4` concurrent runs)
+- for CPU compare runs with multiple workers, cap per-worker torch CPU thread count to reduce oversubscription and preserve effective parallel progress
+- assign unique internal run IDs per compare combination so each run keeps an independent plot/history slot
 - no duplicate finalize lines
 - immutable per-run metadata for labels
 - selected policy determines which compare run drives render/status/progress when available
@@ -299,16 +334,20 @@ Use `Update rate (episodes)` as gating interval:
   - parameter input width `~9`
 - preserve equal-width control buttons
 - button styling baseline:
-  - default dark button style for neutral actions
-  - accent style for active `Train and Run`
-  - amber style for active `Pause/Run`
+  - default dark button style for neutral actions (`bg #3a3d41`, active `#4a4f55`, pressed `#2f3338`)
+  - accent style for active `Train and Run` (`#0e639c`, active `#1177bb`, pressed `#0b4f7a`)
+  - amber style for active `Pause/Run` (`#a66a00`, active `#bf7a00`, pressed `#8c5900`)
 - parameter panel baseline:
   - content fills full available panel width
   - avoid fixed/narrow canvas width constraints
+- combobox listbox baseline:
+  - list bg `#2d2d30`, list fg `#e6e6e6`, selected bg `#0e639c`, selected fg `white`
+- progressbar baseline:
+  - trough `#343434`, fill `#0e639c`
 - plot styling baseline:
   - subtle grid enabled
   - spine tint/alpha aligned with dark theme
-  - subplot margins reserve right legend gutter (`left~0.07`, `right~0.78`)
+- subplot margins reserve right legend gutter (`left~0.04`, `right~0.78`)
 
 ---
 
@@ -337,6 +376,7 @@ Testing robustness rules:
 - include at least one headless smoke path for training loop + event propagation
 - verify pause/resume/cancel transitions and final status reporting for worker jobs
 - include regression coverage for `Pause -> Train and Run` ensuring old finalized runs remain in plot history
+- include regression coverage that stale worker events (for old session IDs) do not modify current progress/status/plot state
 - ensure `run_episode` reports actual executed environment steps even when transition collection is disabled
 
 ---
@@ -364,6 +404,62 @@ then this file must still be sufficient to regenerate a functionally equivalent 
 ---
 
 ## Recent updates
+
+### 2026-03-03
+- update-id: `COMPARE-UNIQUE-RUNID-PLOT-SYNC`
+- synchronized compare runtime behavior with implementation/tests: each compare combination now gets a unique internal run ID, preventing live-plot/history overwrite when runs are created in rapid succession.
+
+### 2026-03-03
+- update-id: `COMPARE-PARALLEL-CPU-THREAD-TUNING-SYNC`
+- synchronized compare runtime behavior with implementation: for multi-worker CPU compare runs, per-worker torch thread count is capped to reduce oversubscription and preserve effective parallel progress.
+
+### 2026-03-03
+- update-id: `GUI-PAUSE-RESTART-HIGHLIGHT-SYNC`
+- synchronized control behavior with implementation: while paused, only `Pause/Run` is highlighted; pressing `Train and Run` during pause cancels the paused run and starts a fresh run from current parameters.
+
+### 2026-03-03
+- update-id: `RUNTIME-SESSION-GUARD-SYNC`
+- synchronized runtime robustness spec with implementation/tests: worker events carry run/session tags and stale events from prior runs are ignored so old runs cannot overwrite active UI state.
+
+### 2026-03-03
+- update-id: `DEFAULTS-AND-DEVICE-README-SYNC`
+- synchronized project docs to current baseline: runtime device selector supports `CPU`/`GPU` with default `CPU` and safe CPU fallback, and GUI default parameter profile reflects current PPO/SAC/TD3 tuned defaults.
+
+### 2026-03-03
+- update-id: `GUI-COMPARE-ROW-AND-HINT-ALIGN-SYNC`
+- synchronized compare spec with current GUI implementation: top compare row now places `Compare on` left with `Clear`/`Add` controls right, input row has unlabeled side-by-side `Parameter` and `Values` fields, and completion hint is positioned directly below the `Values` field.
+
+### 2026-03-03
+- update-id: `GUI-COMPARE-LAYOUT-SIDE-BY-SIDE-SYNC`
+- synchronized compare layout spec with current GUI: `Parameter` and `Values` fields are side-by-side, with `Add`/`Clear` controls side-by-side in the compare header row.
+
+### 2026-03-03
+- update-id: `GUI-COMPARE-DROPDOWN-TAB-PREVIEW-SYNC`
+- synchronized compare spec with current GUI: compare parameter dropdown now includes all `General` + `Specific` parameters and excludes `Environment`; categorical compare values support typed suggestions, `Tab` completion, and live completion preview hint.
+
+### 2026-03-03
+- update-id: `GUI-PLOT-LINESTYLE-LEGEND-FORMAT-SYNC`
+- synchronized live-plot spec with implementation: per-episode reward uses slight transparency (`alpha ~ 0.60`), `MA`/`eval` use same run color with `2x` width and distinct styles, and reward legend entry uses fixed multi-line parameter blocks to avoid legend cutoff.
+
+### 2026-03-03
+- update-id: `RUNTIME-SHUTDOWN-PAUSE-UNBLOCK-SYNC`
+- synchronized runtime shutdown behavior with implementation/tests: on reset/close the GUI resumes paused workers before stop so blocked pause waits cannot keep the process alive after window close.
+
+### 2026-03-03
+- update-id: `GUI-ENV-FIELD-ORDER-WIDTH-SYNC`
+- synchronized spec with current GUI: in the `Environment` group, `healthy_reward` and `reset_noise_scale` are positioned below the `Update` button; input/combobox field widths are standardized within each group via a shared width token.
+
+### 2026-03-03
+- update-id: `GUI-CURRENTRUN-PLOT-LABEL-SYNC`
+- synchronized spec with current GUI: current-run progress bars are explicitly labeled `Steps` and `Episodes`; live plot uses fixed axis labels (`Episodes`, `Reward`) and plot chrome/text colors aligned with GUI text tone.
+
+### 2026-03-03
+- update-id: `GUI-COMPARE-AND-STYLE-SYNC`
+- synchronized GUI spec with current implementation: compare group explicitly includes `Add` + `Clear` workflow for active parameter lists, environment canvas baseline `#111111`, and LunarLander-parity button/combobox/progressbar style values.
+
+### 2026-03-03
+- update-id: `APP-TF-ONEDNN-LOG-SUPPRESS`
+- added app-entry startup rule: set `TF_ENABLE_ONEDNN_OPTS=0` and `TF_CPP_MIN_LOG_LEVEL=3` before GUI/runtime imports to avoid TensorFlow oneDNN informational startup warnings in terminal output.
 
 ### 2026-03-02
 - update-id: `BW-ANIM-TOGGLE-RUNTIME-HOTFIX`

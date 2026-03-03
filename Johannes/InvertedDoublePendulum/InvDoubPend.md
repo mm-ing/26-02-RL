@@ -5,7 +5,7 @@
 
 ## Backend
 - Use `Stable-Baselines3 (SB3)` as RL backend.
-- Use `sb3-contrib` for TRPO.
+- Exposed policies for this project are `PPO`, `SAC`, and `TD3`.
 
 ## Environment details
 - Environment ID: `InvertedDoublePendulum-v5` (gymnasium)

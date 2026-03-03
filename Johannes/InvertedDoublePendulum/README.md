@@ -37,6 +37,13 @@ python -m pytest -q --rootdir . --confcutdir . tests
 ```
 
 ## Notes
-- Device is fixed to `CPU` for all policies.
+- Device is selectable as `CPU` / `GPU` (default `CPU`); if CUDA is unavailable, selection safely falls back to `CPU`.
 - Compare mode uses bounded parallelism (`max 4`).
+- Compare runs use unique internal run IDs per Cartesian combination so parallel runs never overwrite each other in live plot/history.
 - Runtime animation hotfix is included: disabling `Animation on` immediately clears queued replay playback and updates render status.
+- Shutdown robustness fix is included: on reset/window-close, paused workers are resumed before stop so the app process exits cleanly.
+
+## Current default baseline (GUI)
+- General: `Max steps=1000`, `Episodes=100`, `Gamma=0.99`, epsilon defaults set for deterministic SB3 rollouts.
+- PPO-specific defaults: `Hidden layer=256`, `Activation=Tanh`, `LR=3e-4`, `Batch size=128`, `Replay size=100000`, `Learning start=0`.
+- SAC/TD3 policy defaults: larger replay buffer and warmup (`Replay size=500000`, `Learning start=10000`) for improved off-policy stability.
