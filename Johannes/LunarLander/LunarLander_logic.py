@@ -95,7 +95,7 @@ POLICY_DEFAULTS: Dict[str, AgentConfig] = {
     "DuelingDQN": AgentConfig(gamma=0.99, learning_rate=3e-4, replay_size=100000, batch_size=128, target_update=200, replay_warmup=5000, learning_cadence=2, activation_function="ReLU", hidden_layers="256,256,128", lr_strategy="exponential", lr_decay=0.1, min_learning_rate=1e-5, gae_lambda=0.95, ppo_clip_range=0.2),
     "D3QN": AgentConfig(gamma=0.99, learning_rate=2.5e-4, replay_size=150000, batch_size=128, target_update=200, replay_warmup=8000, learning_cadence=2, activation_function="ReLU", hidden_layers="512,256,128", lr_strategy="exponential", lr_decay=0.1, min_learning_rate=1e-5, gae_lambda=0.95, ppo_clip_range=0.2),
     "DDQN+PER": AgentConfig(gamma=0.99, learning_rate=2e-4, replay_size=200000, batch_size=128, target_update=200, replay_warmup=10000, learning_cadence=2, activation_function="ReLU", hidden_layers="512,256,128", lr_strategy="exponential", lr_decay=0.1, min_learning_rate=1e-5, gae_lambda=0.95, ppo_clip_range=0.2),
-    "PPO": AgentConfig(gamma=0.99, learning_rate=3e-4, replay_size=100000, batch_size=128, target_update=200, replay_warmup=5000, learning_cadence=256, activation_function="ReLU", hidden_layers="256,256", lr_strategy="linear", lr_decay=0.3, min_learning_rate=1e-5, gae_lambda=0.95, ppo_clip_range=0.2),
+    "PPO": AgentConfig(gamma=0.99, learning_rate=3e-4, replay_size=100000, batch_size=64, target_update=200, replay_warmup=5000, learning_cadence=64, activation_function="ReLU", hidden_layers="256,256", lr_strategy="linear", lr_decay=0.3, min_learning_rate=1e-5, gae_lambda=0.95, ppo_clip_range=0.2),
     "A2C": AgentConfig(gamma=0.99, learning_rate=3e-4, replay_size=100000, batch_size=128, target_update=200, replay_warmup=5000, learning_cadence=64, activation_function="ReLU", hidden_layers="256,256", lr_strategy="exponential", lr_decay=0.3, min_learning_rate=1e-5, gae_lambda=1.0, ppo_clip_range=0.2),
     "TRPO": AgentConfig(gamma=0.99, learning_rate=1e-4, replay_size=120000, batch_size=64, target_update=200, replay_warmup=6000, learning_cadence=256, activation_function="ReLU", hidden_layers="256,256", lr_strategy="linear", lr_decay=0.4, min_learning_rate=1e-5, gae_lambda=0.95, ppo_clip_range=0.2),
     "SAC": AgentConfig(gamma=0.99, learning_rate=1e-4, replay_size=200000, batch_size=128, target_update=200, replay_warmup=10000, learning_cadence=32, activation_function="ReLU", hidden_layers="256,256", lr_strategy="cosine", lr_decay=0.3, min_learning_rate=1e-5, gae_lambda=0.95, ppo_clip_range=0.2),
@@ -571,11 +571,13 @@ class Trainer:
         total_reward = 0.0
         transitions: List[Tuple[np.ndarray, Union[int, np.ndarray], float, np.ndarray, bool]] = [] if collect_transitions else []
         best_x = float(state[0]) if len(state) > 0 else float("nan")
+        steps_executed = 0
 
         for step in range(1, max_steps + 1):
             action = agent.select_action(state, epsilon, deterministic=deterministic)
             next_state, reward, done, _ = self.env.step(action)
             total_reward += float(reward)
+            steps_executed = int(step)
             best_x = max(best_x, float(next_state[0])) if len(next_state) > 0 else best_x
             if collect_transitions:
                 transition = (state.copy(), action, float(reward), next_state.copy(), bool(done))
@@ -588,7 +590,7 @@ class Trainer:
 
         return {
             "reward": float(total_reward),
-            "steps": int(len(transitions)),
+            "steps": int(steps_executed),
             "best_x": float(best_x),
             "final_state": state,
             "transitions": transitions,

@@ -81,6 +81,22 @@ def test_run_episode_for_policies(trainer, policy):
     assert isinstance(result["transitions"], list)
 
 
+def test_run_episode_reports_steps_without_transition_collection(trainer):
+    policy = "PPO"
+    _configure_fast_learning(trainer, policy)
+
+    result = trainer.run_episode(
+        policy=policy,
+        epsilon=0.2,
+        max_steps=10,
+        collect_transitions=False,
+    )
+
+    assert result["steps"] > 0
+    assert result["steps"] <= 10
+    assert result["transitions"] == []
+
+
 def test_learning_updates_progress(trainer):
     policy = "D3QN"
     _configure_fast_learning(trainer, policy)
