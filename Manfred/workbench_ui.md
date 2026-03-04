@@ -32,7 +32,12 @@
 - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: 2x ein Label gefolgt einem Textfeld
 #### Methoden **Tab-Control** (für spezifische RL-Methodenparameter)
 - **Tab-Header** für die Konfiguration jeder gewählten RL-Methode
-- **Tab-Content-Panel** für methodenspezifische RL-Parameter wie z.B: Buffer-Size, Batch-Size,  Learning-Starts, Train-Frequency, Gradient-Step, Target-Update, Dropdown zur Auswahl von gängigen Exploration/Exploitation Algorithmen - alternativ Epsion-Max, Epsilon-Min, Epsilon-Decay, Activation 
+- **Tab-Content-Panel** für methodenspezifische RL-Parameter
+- Parameter wie z.B: Buffer-Size, Batch-Size,  Learning-Starts, Train-Frequency, Gradient-Step, Target-Update, etc.
+- Dropdown zur Auswahl von gängigen Exploration/Exploitation Algorithmen 
+- Einstell-Möglichkeit, für Epsion-Max, Epsilon-Min, Epsilon-Decay
+- Hidden-Layer Auswahl, durch Komma getrennte Hidden-Layer
+- Dropdown zur Auswahl der N.N. Activation-Methode 
 - !!!außer Episodes, Max-Steps, Alpha, Gamma (!!!stehen schon im Panel `Episode Configuration`)
 - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: 2x ein Label gefolgt einem Textfeld 
 - Button: `Apply and Reset` für alle Konfigurationen !!!auch für die Checkboxen `Compare Methods` und `Enable Tuning`
@@ -55,13 +60,13 @@
 - (volle Fernsterbreite): Plot (X=Episodes, Y=Return)
 - Oberhalb des Plot: Progressbar (Episoden-Fortschritt, volle Fernsterbreite)
 - Zwischen Progressbar und Plot Buttons über volle Fensterbreite in einer Reihe anordnen. Reduziere bei Bedarf die Button-Höhe/-Breite/Padding oder verwende ein kompaktes Style-Variant, das standardmäßig aktiviert ist, bis genügend Platz zur Verfügung steht.Dynamische Anpassung: Falls das Fenster später vergrößert wird, dürfen die Buttons wieder in die großzügigere Variante wechseln; die Logik muss automatisch reagieren.
-    - `Add Job` (Fügt TrainingJob hinzu - gewählter Algorithmus, Episodenkonfiguartion etc. )
-    - `Train` (startet das training aller TrainingJobs, die im Status pending sind)  
-    - `Training status` (öffnet modales Fenster und zeigt aktuelle Zustände des Trainings)        
-    - `Save image` (mit Methoden-Name als Dateiname als Bild speichern)
-    - `Save content`(mit Methoden-Name den Inhalt des Plots, die Zahlen, als JSON-Datei speichern)
-    - `Load content`(JSON-Datei auswählen lassen und dann sichtbar in den Plot laden)
-    - `Cancel Training` (bricht alle laufenden TrainingJobs ab)
+    - `Add Job` fügt TrainingJob hinzu - gewählter Algorithmus, Episodenkonfiguartion etc. 
+    - `Train` startet das training aller TrainingJobs, die im Status pending sind  
+    - `Training status` öffnet modales Fenster und zeigt aktuelle Zustände des Trainings        
+    - `Save image` mit Methoden-Name (ggf. plus gewählter Parameter) als Vorgabe für den Dateiname, als Bild speichern
+    - `Save content` mit Methoden-Name den Inhalt des Plots, die Zahlen, als JSON-Datei speichern
+    - `Load content` JSON-Datei mit Methoden-Name (ggf. plus gewählter Parameter) als Vorgabename für den Dateiname, auswählen lassen und dann sichtbar in den Plot laden
+    - `Cancel Training` bricht alle laufenden TrainingJobs ab
     - `Reset Training` löscht den aktuellen Plot und beginnt für alle Methoden wieder bei der ersten Episode
 - Plot-Legende: rechts außerhalb des Plots.
 
