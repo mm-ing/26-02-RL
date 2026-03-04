@@ -114,7 +114,7 @@
 - Plot, Progressbar und Environment-Visualisierung werden während des Trainings permanent aktualisiert.
 
 ## Performance
-- Nach Implementierung der einzelnen Lern-Methoden, bitte mehrere Optimierungs-Runden einbauen zur Beschleunigung der Algorithmen
+- Nach Implementierung der einzelnen Lern-Methoden, bitte mehrere Optimierungs-Runden einbauen zur Beschleunigung der Algorithmen und zur Verbesserung des Lernens
 
 ## Tests
 - Schreibe Unit-Tests für die implementierten Methoden
