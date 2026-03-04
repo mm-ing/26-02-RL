@@ -22,14 +22,14 @@
 - Allgemeine RL-Parameter: Episodes (!!!default 3000), Max-Steps, Dropdown zur Auswahl von gängigen Learning-Rate-Algorithmen, Alpha, Gamma
 - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: 2x ein Label gefolgt einem Textfeld (Episodes, Max-Steps), (Alpha, Gamma)...
 #### Parameter Tuning
-- Checkbox: `Parameter Tuning` (Lässt ausgewählte Methode mit allen Einstellungen zwischen Min und Max mit dem Inkrement Step parallel trainieren)
-- Dropdown für die Methodenauswahl. Erst wenn Methode ausgewählt wurde sind weitere Felder änderbar. Ausgewählte Methode wird in Liste (s.u.) geschrieben.
-- Dropdown für die Parameter-Auswahl zur ausgewählten Methode. Auch Hidden-Layers auswählbar!
-- Werte Textfeld zur Aufnahme unterschiedlicher Parameterwerte, getrennt durch Komma.
-- !!!Ausnahme bei Hidden-Layers, dort werden die Schichten durch Komma getrennt, neue Werte durch Strichpunkt.
-- Liste mit 2 Spalten Parameter/Wert: gewählter Parameter (Methode) - ausgewählter Wert
-- In der Liste für jeden gewählten Wert zu einem Parameter eine neue Zeile.
+- Checkbox: `Enable Parameter Tuning`: Um die aktuell ausgewählte Methode mit allen Parameter-Einstellungen aus der Liste parallel trainieren zu lassen
+- Dropdown `Parameter` für die Parameter-Auswahl zur ausgewählten Methode. Auch Hidden-Layers auswählbar!
+- Werte Textfeld `Value` zur Aufnahme eines Wertes für den gewählten Parameter. !!!Ausnahme bei Hidden-Layers, dort werden die einzelnen Schichten durch Komma getrennt.
 - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: 2x ein Label gefolgt einem Textfeld
+- Liste mit 3 Spalten `Method`/`Parameter`/`Wert`: gewählte Methode/gewählter Parameter/ausgewählter Wert
+- Button `Add to List`: Gewählte Methode oder gewählter Parameter wird in die List übertragen. Ist nur enabled, wenn sowohl Methode als auch Parameter mit Wert ausgewählt wurde.
+- Button `Remove Selected`: Gewähtle Zeile in der Liste 
+- Button `Clear List`: Die Liste wird vollständig gelöst
 #### Methoden **Tab-Control** (für spezifische RL-Methodenparameter)
 - **Tab-Header** für die Konfiguration jeder gewählten RL-Methode
 - **Tab-Content-Panel** für methodenspezifische RL-Parameter
@@ -82,7 +82,8 @@
     - Raw-Line: Farbe #4cc9f0, Alpha 0.35, Linienbreite 1.0 (nur für die erste Linie)
     - Moving-Average-Line: Farbe #4cc9f0, Alpha 1.0, Linienbreite 2.5 (nur für die erste Linie)
     - Weitere Linien: gleicher Stil (Raw: Alpha 0.35, LW 1.0; Avg: Alpha 1.0, LW 2.5), aber mit gutem Kontrast in anderen Farben
-    - Legend: Facecolor #0f111a, Edgecolor #2a2f3a, Labelcolor #e6e6e6
+- Legend: Facecolor #0f111a, Edgecolor #2a2f3a, Labelcolor #e6e6e6
+    - Methoden-Name und ggf. Parameter-Name mit Parameter-Wert mitführen
 
 ## Layout-Stabilität (wichtig)
 - **Resize-Debounce**: Resize-Handler dürfen nicht bei jedem Configure-Event komplett neu berechnen oder Styles wechseln. Verwende einen Debounce von ~100 ms (`after()` / `after_cancel()`) bevor Layout-Änderungen angewendet werden.
