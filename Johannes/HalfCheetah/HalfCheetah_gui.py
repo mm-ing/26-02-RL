@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import queue
 import threading
 import uuid
@@ -36,6 +37,42 @@ except Exception:
     ImageTk = None
 
 
+class _Tooltip:
+    def __init__(self, widget, text: str):
+        self.widget = widget
+        self.text = text
+        self.tip_window = None
+        self.widget.bind("<Enter>", self._show)
+        self.widget.bind("<Leave>", self._hide)
+        self.widget.bind("<ButtonPress>", self._hide)
+
+    def _show(self, _event=None):
+        if self.tip_window is not None:
+            return
+        x = self.widget.winfo_rootx() + 12
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(
+            tw,
+            text=self.text,
+            justify="left",
+            background="#2d2d30",
+            foreground="#e6e6e6",
+            relief="solid",
+            borderwidth=1,
+            padx=6,
+            pady=4,
+        )
+        label.pack()
+
+    def _hide(self, _event=None):
+        if self.tip_window is not None:
+            self.tip_window.destroy()
+            self.tip_window = None
+
+
 class HalfCheetahGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -63,6 +100,7 @@ class HalfCheetahGUI:
         self.playback_index = 0
         self.playback_total_frames = 0
         self.playback_after_id: str | None = None
+        self._tooltips: List[_Tooltip] = []
 
         self.trainer = HalfCheetahTrainer(base_dir=str(self.base_dir), event_callback=self._push_event)
 
@@ -75,8 +113,16 @@ class HalfCheetahGUI:
         self._set_control_highlight()
         self._pump_events()
 
+        self.legend_scroll_y = 1.0
+        self.legend_scroll_min_y = 1.0
+        self.legend_pick_cid = None
+        self.legend_hover_cid = None
+        self.legend_scroll_cid = None
+
     def _configure_style(self):
         self.root.configure(bg="#1e1e1e")
+        self.root.option_add("*Entry.insertBackground", "#ffffff")
+        self.root.option_add("*TEntry*insertBackground", "#ffffff")
         style = ttk.Style()
         try:
             style.theme_use("clam")
@@ -108,6 +154,7 @@ class HalfCheetahGUI:
         self.animation_on_var = tk.BooleanVar(value=True)
         self.animation_fps_var = tk.IntVar(value=30)
         self.update_rate_var = tk.IntVar(value=1)
+        self.frame_stride_var = tk.IntVar(value=2)
 
         self.env_forward_reward_weight_var = tk.DoubleVar(value=ENV_DEFAULTS["forward_reward_weight"])
         self.env_ctrl_cost_weight_var = tk.DoubleVar(value=ENV_DEFAULTS["ctrl_cost_weight"])
@@ -135,6 +182,7 @@ class HalfCheetahGUI:
         self.lr_decay_var = tk.DoubleVar(value=1.0)
         self.replay_size_var = tk.IntVar(value=100000)
         self.batch_size_var = tk.IntVar(value=64)
+        self.n_steps_var = tk.IntVar(value=int(POLICY_DEFAULTS["PPO"].get("n_steps", 2048)))
         self.learning_start_var = tk.IntVar(value=0)
         self.learning_frequency_var = tk.IntVar(value=1)
         self.target_update_var = tk.IntVar(value=1)
@@ -223,7 +271,7 @@ class HalfCheetahGUI:
             group,
             0,
             "Animation on",
-            ttk.Checkbutton(group, variable=self.animation_on_var),
+            ttk.Checkbutton(group, variable=self.animation_on_var, command=self._on_animation_toggle),
             "Animation FPS",
             ttk.Entry(group, textvariable=self.animation_fps_var, width=9),
         )
@@ -232,8 +280,8 @@ class HalfCheetahGUI:
             1,
             "Update rate (episodes)",
             ttk.Entry(group, textvariable=self.update_rate_var, width=9),
-            "",
-            ttk.Label(group, text=""),
+            "Frame stride",
+            ttk.Entry(group, textvariable=self.frame_stride_var, width=9),
         )
 
         btn = ttk.Button(group, text="Update", style="Neutral.TButton", command=self._update_environment_only)
@@ -275,6 +323,7 @@ class HalfCheetahGUI:
         param_options = self._compare_param_options()
         self.compare_param_combo = ttk.Combobox(group, textvariable=self.compare_param_var, values=param_options, state="readonly", width=16)
         self.compare_param_combo.grid(row=1, column=0, sticky="ew", padx=(0, 4))
+        self._disable_combobox_mousewheel(self.compare_param_combo)
 
         self.compare_values_entry = ttk.Entry(group, textvariable=self.compare_values_var)
         self.compare_values_entry.grid(row=1, column=1, sticky="ew")
@@ -282,7 +331,7 @@ class HalfCheetahGUI:
         self.compare_values_entry.bind("<Tab>", self._complete_compare_value)
         self.compare_values_var.trace_add("write", lambda *_: self._refresh_compare_hint())
 
-        ttk.Label(group, textvariable=self.compare_hint_var, style="TLabel").grid(row=2, column=0, columnspan=2, sticky="w")
+        ttk.Label(group, textvariable=self.compare_hint_var, style="TLabel").grid(row=2, column=1, sticky="w")
 
         self.compare_summary = tk.Text(group, height=3, bg="#2d2d30", fg="#e6e6e6", insertbackground="#e6e6e6", relief="flat")
         self.compare_summary.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(4, 0))
@@ -301,39 +350,103 @@ class HalfCheetahGUI:
             "Episodes",
             ttk.Entry(group, textvariable=self.episodes_var, width=9),
         )
-        self._add_pair_row(
-            group,
-            1,
-            "Epsilon max",
-            ttk.Entry(group, textvariable=self.epsilon_max_var, width=9),
-            "Epsilon decay",
-            ttk.Entry(group, textvariable=self.epsilon_decay_var, width=9),
-        )
-        self._add_pair_row(
-            group,
-            2,
-            "Epsilon min",
-            ttk.Entry(group, textvariable=self.epsilon_min_var, width=9),
-            "Gamma",
-            ttk.Entry(group, textvariable=self.gamma_var, width=9),
-        )
 
     def _build_specific_group(self, parent):
         group = self._build_group(parent, "Specific")
         group.columnconfigure(1, weight=1)
         group.columnconfigure(3, weight=1)
+        self.specific_group = group
 
-        ttk.Label(group, text="Policy").grid(row=0, column=0, sticky="w", pady=2)
+        policy_label = ttk.Label(group, text="Policy")
+        policy_label.grid(row=0, column=0, sticky="w", pady=2)
         policy = ttk.Combobox(group, textvariable=self.policy_var, values=list(EXPOSED_POLICIES), state="readonly", width=18)
         policy.grid(row=0, column=1, columnspan=3, sticky="ew", pady=2)
-        policy.bind("<<ComboboxSelected>>", lambda _e: self._apply_policy_defaults())
+        policy.bind("<<ComboboxSelected>>", lambda _e: self._on_policy_changed())
+        self._disable_combobox_mousewheel(policy)
 
-        self._add_pair_row(group, 1, "Hidden layer", ttk.Entry(group, textvariable=self.hidden_layer_var, width=9), "Activation", ttk.Combobox(group, textvariable=self.activation_var, values=["ReLU", "Tanh", "ELU", "GELU"], state="readonly", width=9))
-        self._add_pair_row(group, 2, "LR", ttk.Entry(group, textvariable=self.lr_var, width=9), "LR strategy", ttk.Combobox(group, textvariable=self.lr_strategy_var, values=["constant", "linear", "exponential"], state="readonly", width=9))
-        self._add_pair_row(group, 3, "Min LR", ttk.Entry(group, textvariable=self.min_lr_var, width=9), "LR decay", ttk.Entry(group, textvariable=self.lr_decay_var, width=9))
-        self._add_pair_row(group, 4, "Replay size", ttk.Entry(group, textvariable=self.replay_size_var, width=9), "Batch size", ttk.Entry(group, textvariable=self.batch_size_var, width=9))
-        self._add_pair_row(group, 5, "Learning start", ttk.Entry(group, textvariable=self.learning_start_var, width=9), "Learning frequency", ttk.Entry(group, textvariable=self.learning_frequency_var, width=9))
-        self._add_pair_row(group, 6, "Target update", ttk.Entry(group, textvariable=self.target_update_var, width=9), "", ttk.Label(group, text=""))
+        hidden_layer_entry = ttk.Entry(group, textvariable=self.hidden_layer_var, width=9)
+        activation_combo = ttk.Combobox(group, textvariable=self.activation_var, values=["ReLU", "Tanh", "ELU", "GELU"], state="readonly", width=9)
+        self._disable_combobox_mousewheel(activation_combo)
+        self._add_pair_row(group, 1, "Hidden layer", hidden_layer_entry, "Activation", activation_combo)
+
+        gamma_entry = ttk.Entry(group, textvariable=self.gamma_var, width=9)
+        batch_size_entry = ttk.Entry(group, textvariable=self.batch_size_var, width=9)
+        self._add_pair_row(group, 2, "Gamma", gamma_entry, "Batch size", batch_size_entry)
+
+        lr_entry = ttk.Entry(group, textvariable=self.lr_var, width=9)
+        lr_strategy_combo = ttk.Combobox(group, textvariable=self.lr_strategy_var, values=["constant", "linear", "exponential"], state="readonly", width=9)
+        self._disable_combobox_mousewheel(lr_strategy_combo)
+        self._add_pair_row(group, 3, "LR", lr_entry, "LR strategy", lr_strategy_combo)
+
+        min_lr_entry = ttk.Entry(group, textvariable=self.min_lr_var, width=9)
+        lr_decay_entry = ttk.Entry(group, textvariable=self.lr_decay_var, width=9)
+        self._add_pair_row(group, 4, "Min LR", min_lr_entry, "LR decay", lr_decay_entry)
+
+        self.policy_specific_separator = ttk.Separator(group, orient="horizontal")
+        self.policy_specific_separator.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(6, 4))
+
+        self.ppo_n_steps_label = ttk.Label(group, text="n_steps")
+        self.ppo_n_steps_entry = ttk.Entry(group, textvariable=self.n_steps_var, width=9)
+        self.ppo_empty_label = ttk.Label(group, text="")
+        self.ppo_empty_value = ttk.Label(group, text="")
+
+        self.off_replay_size_label = ttk.Label(group, text="Replay size")
+        self.off_replay_size_entry = ttk.Entry(group, textvariable=self.replay_size_var, width=9)
+        self.off_learning_start_label = ttk.Label(group, text="Learning start")
+        self.off_learning_start_entry = ttk.Entry(group, textvariable=self.learning_start_var, width=9)
+
+        self.off_learning_frequency_label = ttk.Label(group, text="Learning frequency")
+        self.off_learning_frequency_entry = ttk.Entry(group, textvariable=self.learning_frequency_var, width=9)
+        self.off_empty_label = ttk.Label(group, text="")
+        self.off_empty_value = ttk.Label(group, text="")
+
+        self._add_tooltip(policy, "Selects the algorithm family; this switches optimizer dynamics and which policy-specific controls are active.")
+        self._add_tooltip(hidden_layer_entry, "Sets network width. Larger values increase capacity and compute cost.")
+        self._add_tooltip(activation_combo, "Changes network nonlinearity, affecting optimization smoothness and representation shape.")
+        self._add_tooltip(gamma_entry, "Discount factor for future rewards. Higher values favor long-term return.")
+        self._add_tooltip(batch_size_entry, "Samples per gradient step. Larger batches reduce gradient noise but are slower.")
+        self._add_tooltip(lr_entry, "Base learning rate. Higher values learn faster but can destabilize training.")
+        self._add_tooltip(lr_strategy_combo, "Schedules how learning rate changes over training (constant/linear/exponential).")
+        self._add_tooltip(min_lr_entry, "Lower bound for scheduled learning rate to avoid vanishing update steps.")
+        self._add_tooltip(lr_decay_entry, "Decay strength for exponential LR schedule; lower values reduce LR faster.")
+        self._add_tooltip(self.ppo_n_steps_entry, "PPO rollout length before an update. Larger values improve estimate quality but delay updates.")
+        self._add_tooltip(self.off_replay_size_entry, "Replay buffer capacity. Larger buffers improve diversity but increase memory use.")
+        self._add_tooltip(self.off_learning_start_entry, "Number of steps collected before updates begin. Higher values improve early stability.")
+        self._add_tooltip(self.off_learning_frequency_entry, "How often gradient updates run. Higher frequency increases learning speed and compute load.")
+
+        self._set_policy_specific_visibility()
+
+    def _set_policy_specific_visibility(self):
+        is_ppo = str(self.policy_var.get()) == "PPO"
+
+        self.ppo_n_steps_label.grid_remove()
+        self.ppo_n_steps_entry.grid_remove()
+        self.ppo_empty_label.grid_remove()
+        self.ppo_empty_value.grid_remove()
+        self.off_replay_size_label.grid_remove()
+        self.off_replay_size_entry.grid_remove()
+        self.off_learning_start_label.grid_remove()
+        self.off_learning_start_entry.grid_remove()
+        self.off_learning_frequency_label.grid_remove()
+        self.off_learning_frequency_entry.grid_remove()
+        self.off_empty_label.grid_remove()
+        self.off_empty_value.grid_remove()
+
+        if is_ppo:
+            self.ppo_n_steps_label.grid(row=6, column=0, sticky="w", pady=2)
+            self.ppo_n_steps_entry.grid(row=6, column=1, sticky="ew", pady=2, padx=(0, 6))
+            self.ppo_empty_label.grid(row=6, column=2, sticky="w", pady=2)
+            self.ppo_empty_value.grid(row=6, column=3, sticky="ew", pady=2)
+            return
+
+        self.off_replay_size_label.grid(row=6, column=0, sticky="w", pady=2)
+        self.off_replay_size_entry.grid(row=6, column=1, sticky="ew", pady=2, padx=(0, 6))
+        self.off_learning_start_label.grid(row=6, column=2, sticky="w", pady=2)
+        self.off_learning_start_entry.grid(row=6, column=3, sticky="ew", pady=2)
+        self.off_learning_frequency_label.grid(row=7, column=0, sticky="w", pady=2)
+        self.off_learning_frequency_entry.grid(row=7, column=1, sticky="ew", pady=2, padx=(0, 6))
+        self.off_empty_label.grid(row=7, column=2, sticky="w", pady=2)
+        self.off_empty_value.grid(row=7, column=3, sticky="ew", pady=2)
 
     def _build_live_plot_group(self, parent):
         group = self._build_group(parent, "Live Plot")
@@ -361,7 +474,9 @@ class HalfCheetahGUI:
         ttk.Button(frame, text="Clear Plot", style="Neutral.TButton", command=self.clear_plot).grid(row=0, column=4, sticky="ew", padx=2)
         ttk.Button(frame, text="Save samplings CSV", style="Neutral.TButton", command=self.save_samplings_csv).grid(row=0, column=5, sticky="ew", padx=2)
         ttk.Button(frame, text="Save Plot PNG", style="Neutral.TButton", command=self.save_plot_png).grid(row=0, column=6, sticky="ew", padx=2)
-        ttk.Combobox(frame, textvariable=self.device_var, values=["CPU", "GPU"], state="readonly", width=8).grid(row=0, column=7, sticky="ew", padx=2)
+        device_combo = ttk.Combobox(frame, textvariable=self.device_var, values=["CPU", "GPU"], state="readonly", width=8)
+        device_combo.grid(row=0, column=7, sticky="ew", padx=2)
+        self._disable_combobox_mousewheel(device_combo)
 
     def _build_current_run_panel(self, parent):
         frame = ttk.LabelFrame(parent, text="Current Run", style="Group.TLabelframe", padding=6)
@@ -445,11 +560,27 @@ class HalfCheetahGUI:
     def _on_compare_toggle(self):
         if self.compare_on_var.get():
             self.animation_on_var.set(False)
+            self._on_animation_toggle()
+
+    def _on_animation_toggle(self):
+        animation_enabled = bool(self.animation_on_var.get())
+        for worker in self._active_workers():
+            worker.set_animation_enabled(animation_enabled)
+        if not animation_enabled:
+            self._stop_frame_playback()
 
     def _compare_param_options(self):
-        general = ["max_steps", "episodes", "epsilon_max", "epsilon_decay", "epsilon_min", "gamma", "device"]
-        specific = ["policy", "hidden_layer", "activation", "lr", "lr_strategy", "min_lr", "lr_decay", "replay_size", "batch_size", "learning_start", "learning_frequency", "target_update"]
+        general = ["max_steps", "episodes", "gamma", "device"]
+        policy_specific = ["n_steps"] if str(self.policy_var.get()) == "PPO" else ["replay_size", "learning_start", "learning_frequency"]
+        specific = ["policy", "hidden_layer", "activation", "batch_size", "lr", "lr_strategy", "min_lr", "lr_decay"] + policy_specific
         return general + specific
+
+    def _refresh_compare_param_options(self):
+        options = self._compare_param_options()
+        self.compare_param_combo.configure(values=options)
+        if self.compare_param_var.get() not in options:
+            self.compare_param_var.set(options[0])
+            self._refresh_compare_hint()
 
     def _refresh_compare_hint(self):
         param = self.compare_param_var.get()
@@ -479,6 +610,7 @@ class HalfCheetahGUI:
         if suggestion:
             parts[-1] = suggestion
             self.compare_values_var.set(", ".join([p for p in parts if p]))
+            self.compare_values_entry.icursor("end")
         return "break"
 
     def _compare_add(self):
@@ -503,9 +635,9 @@ class HalfCheetahGUI:
         self.compare_summary.configure(state="disabled")
 
     def _coerce_value(self, key: str, value: str):
-        if key in {"max_steps", "episodes", "hidden_layer", "replay_size", "batch_size", "learning_start", "learning_frequency", "target_update"}:
+        if key in {"max_steps", "episodes", "hidden_layer", "batch_size", "n_steps", "replay_size", "learning_start", "learning_frequency"}:
             return int(float(value))
-        if key in {"epsilon_max", "epsilon_decay", "epsilon_min", "gamma", "lr", "min_lr", "lr_decay"}:
+        if key in {"gamma", "lr", "min_lr", "lr_decay"}:
             return float(value)
         return value
 
@@ -513,6 +645,7 @@ class HalfCheetahGUI:
         defaults = dict(POLICY_DEFAULTS.get(self.policy_var.get(), POLICY_DEFAULTS["PPO"]))
         self.hidden_layer_var.set(int(defaults["hidden_layer"]))
         self.activation_var.set(str(defaults["activation"]))
+        self.n_steps_var.set(int(defaults.get("n_steps", POLICY_DEFAULTS["PPO"].get("n_steps", 2048))))
         self.lr_var.set(f"{defaults['lr']:.2e}".replace("e-0", "e-").replace("e+0", "e+"))
         self.lr_strategy_var.set(str(defaults["lr_strategy"]))
         self.min_lr_var.set(f"{defaults['min_lr']:.2e}".replace("e-0", "e-").replace("e+0", "e+"))
@@ -522,6 +655,22 @@ class HalfCheetahGUI:
         self.learning_start_var.set(int(defaults["learning_start"]))
         self.learning_frequency_var.set(int(defaults["learning_frequency"]))
         self.target_update_var.set(int(defaults["target_update"]))
+        self._set_policy_specific_visibility()
+        if hasattr(self, "compare_param_combo"):
+            self._refresh_compare_param_options()
+
+    def _on_policy_changed(self):
+        self._set_policy_specific_visibility()
+        self._refresh_compare_param_options()
+        self._refresh_compare_hint()
+
+    def _disable_combobox_mousewheel(self, combo: ttk.Combobox):
+        combo.bind("<MouseWheel>", lambda _e: "break")
+        combo.bind("<Button-4>", lambda _e: "break")
+        combo.bind("<Button-5>", lambda _e: "break")
+
+    def _add_tooltip(self, widget, text: str):
+        self._tooltips.append(_Tooltip(widget, text))
 
     def _set_control_highlight(self):
         if self.is_paused:
@@ -552,22 +701,26 @@ class HalfCheetahGUI:
             "exclude_current_positions_from_observation": bool(self.env_exclude_positions_var.get()),
         }
 
+        policy = str(self.policy_var.get())
         specific = {
             "hidden_layer": int(self.hidden_layer_var.get()),
             "activation": str(self.activation_var.get()),
+            "batch_size": int(self.batch_size_var.get()),
             "lr": float(self.lr_var.get()),
             "lr_strategy": str(self.lr_strategy_var.get()),
             "min_lr": float(self.min_lr_var.get()),
             "lr_decay": float(self.lr_decay_var.get()),
-            "replay_size": int(self.replay_size_var.get()),
-            "batch_size": int(self.batch_size_var.get()),
-            "learning_start": int(self.learning_start_var.get()),
-            "learning_frequency": int(self.learning_frequency_var.get()),
-            "target_update": int(self.target_update_var.get()),
         }
 
+        if policy == "PPO":
+            specific["n_steps"] = int(self.n_steps_var.get())
+        else:
+            specific["replay_size"] = int(self.replay_size_var.get())
+            specific["learning_start"] = int(self.learning_start_var.get())
+            specific["learning_frequency"] = int(self.learning_frequency_var.get())
+
         return {
-            "policy": str(self.policy_var.get()),
+            "policy": policy,
             "device": str(self.device_var.get()),
             "episodes": int(self.episodes_var.get()),
             "max_steps": int(self.max_steps_var.get()),
@@ -577,6 +730,7 @@ class HalfCheetahGUI:
             "epsilon_min": float(self.epsilon_min_var.get()),
             "moving_average_values": int(self.moving_average_var.get()),
             "update_rate_episodes": int(self.update_rate_var.get()),
+            "frame_capture_stride": int(self.frame_stride_var.get()),
             "animation_on": bool(self.animation_on_var.get()),
             "rollout_full_capture_steps": int(self.rollout_capture_var.get()),
             "low_overhead_animation": bool(self.low_overhead_var.get()),
@@ -590,6 +744,15 @@ class HalfCheetahGUI:
     def _build_run_metadata(self, cfg: Dict[str, Any]) -> Dict[str, Any]:
         env = dict(cfg.get("env_params", {}))
         specific = dict(cfg.get("specific_params", {}))
+        compare_values: Dict[str, Any] = {}
+        compare_keys = list(cfg.get("compare_keys", []))
+        for key in compare_keys:
+            if key in cfg:
+                compare_values[key] = cfg.get(key)
+            elif key in specific:
+                compare_values[key] = specific.get(key)
+            elif key in env:
+                compare_values[key] = env.get(key)
         return {
             "policy": str(cfg.get("policy", "?")),
             "max_steps": int(cfg.get("max_steps", 0)),
@@ -601,6 +764,7 @@ class HalfCheetahGUI:
             "lr_strategy": specific.get("lr_strategy", "?"),
             "lr_decay": specific.get("lr_decay", "?"),
             "env": env,
+            "compare_values": compare_values,
         }
 
     def _update_environment_only(self):
@@ -627,6 +791,7 @@ class HalfCheetahGUI:
                 deterministic=True,
                 collect_transitions=True,
                 animation_on=bool(cfg["animation_on"]),
+                frame_capture_stride=max(1, int(cfg["frame_capture_stride"])),
                 rollout_full_capture_steps=int(cfg["rollout_full_capture_steps"]),
                 low_overhead_animation=bool(cfg["low_overhead_animation"]),
             )
@@ -669,7 +834,8 @@ class HalfCheetahGUI:
         try:
             if self.compare_on_var.get() and self.compare_items:
                 runs = build_compare_runs(cfg, self.compare_items)
-                if runs and bool(cfg.get("animation_on", False)):
+                compare_keys = list(self.compare_items.keys())
+                if runs:
                     selected_policy = str(self.policy_var.get())
                     selected = next((r for r in runs if str(r.get("policy")) == selected_policy), None)
                     self.render_run_id = str((selected or runs[0]).get("run_id"))
@@ -677,11 +843,17 @@ class HalfCheetahGUI:
                     self.render_run_id = None
 
                 workers = min(4, len(runs))
+                if workers > 1:
+                    cpu_count = max(1, int(os.cpu_count() or workers))
+                    threads_per_worker = max(1, cpu_count // workers)
+                    cap_torch_cpu_threads(max(1, min(8, threads_per_worker)))
+
                 with ThreadPoolExecutor(max_workers=workers) as pool:
                     futures = []
                     for run_cfg in runs:
                         run_cfg_local = dict(run_cfg)
-                        run_cfg_local["animation_on"] = bool(cfg.get("animation_on", False) and run_cfg_local.get("run_id") == self.render_run_id)
+                        run_cfg_local["compare_keys"] = list(compare_keys)
+                        run_cfg_local["animation_on"] = bool(run_cfg_local.get("run_id") == self.render_run_id)
                         run_cfg_local["rollout_full_capture_steps"] = int(cfg.get("rollout_full_capture_steps", 120))
                         run_cfg_local["low_overhead_animation"] = bool(cfg.get("low_overhead_animation", False))
                         self.run_metadata[str(run_cfg_local.get("run_id"))] = self._build_run_metadata(run_cfg_local)
@@ -692,10 +864,12 @@ class HalfCheetahGUI:
                     for fut in as_completed(futures):
                         fut.result()
             else:
-                self.run_metadata[str(cfg.get("run_id"))] = self._build_run_metadata(cfg)
+                cfg_single = dict(cfg)
+                cfg_single["animation_on"] = True
+                self.run_metadata[str(cfg_single.get("run_id"))] = self._build_run_metadata(cfg_single)
                 trainer = HalfCheetahTrainer(base_dir=str(self.base_dir), event_callback=self._make_session_event_sink(session_id))
                 self._register_worker(trainer)
-                self._execute_single_run(trainer, cfg, False)
+                self._execute_single_run(trainer, cfg_single, False)
         except Exception as exc:
             self._push_event({"type": "error", "run_id": self.current_run_id, "session_id": session_id, "message": str(exc)})
         finally:
@@ -710,8 +884,6 @@ class HalfCheetahGUI:
         return _session_event_sink
 
     def _execute_single_run(self, local_trainer: HalfCheetahTrainer, cfg: Dict[str, Any], compare_mode: bool):
-        if compare_mode:
-            cap_torch_cpu_threads(1)
         try:
             local_trainer.train(cfg)
         finally:
@@ -720,6 +892,7 @@ class HalfCheetahGUI:
     def _register_worker(self, worker: HalfCheetahTrainer):
         with self._workers_lock:
             self.current_workers.append(worker)
+        worker.set_animation_enabled(bool(self.animation_on_var.get()))
         if self.is_paused:
             worker.pause()
         else:
@@ -927,12 +1100,35 @@ class HalfCheetahGUI:
 
             meta = self.run_metadata.get(run_id, {})
             env_meta = dict(meta.get("env", {}))
+            compare_meta = dict(meta.get("compare_values", {}))
             label = (
                 f"{meta.get('policy', self.policy_var.get())} | steps={meta.get('max_steps', self.max_steps_var.get())} | gamma={meta.get('gamma', self.gamma_var.get())}\n"
                 f"epsilon={meta.get('epsilon_max', self.epsilon_max_var.get())} | epsilon_decay={meta.get('epsilon_decay', self.epsilon_decay_var.get())} | epsilon_min={meta.get('epsilon_min', self.epsilon_min_var.get())}\n"
                 f"LR={meta.get('lr', self.lr_var.get())} | LR strategy={meta.get('lr_strategy', self.lr_strategy_var.get())} | LR decay={meta.get('lr_decay', self.lr_decay_var.get())}\n"
                 f"forward_reward_weight={env_meta.get('forward_reward_weight', self.env_forward_reward_weight_var.get())} | ctrl_cost_weight={env_meta.get('ctrl_cost_weight', self.env_ctrl_cost_weight_var.get())} | reset_noise_scale={env_meta.get('reset_noise_scale', self.env_reset_noise_scale_var.get())}"
             )
+            if compare_meta:
+                already_stated = {
+                    "policy",
+                    "max_steps",
+                    "gamma",
+                    "epsilon_max",
+                    "epsilon_decay",
+                    "epsilon_min",
+                    "lr",
+                    "lr_strategy",
+                    "lr_decay",
+                    "forward_reward_weight",
+                    "ctrl_cost_weight",
+                    "reset_noise_scale",
+                }
+                extra_parts = []
+                for key, value in compare_meta.items():
+                    if key in already_stated:
+                        continue
+                    extra_parts.append(f"{key}={value}")
+                if extra_parts:
+                    label = f"{label}\ncompare: {' | '.join(extra_parts)}"
             reward_line, = self.ax.plot(eps, rewards, color=color, alpha=0.60, linewidth=1.5, label=label)
             ma_line, = self.ax.plot(eps, ma, color=color, alpha=1.0, linewidth=3.0, linestyle="--", label="moving average")
             if ev:
@@ -945,15 +1141,49 @@ class HalfCheetahGUI:
             self._legend_artists[run_id] = [reward_line, ma_line, eval_line]
 
         self.legend_obj = self.ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), frameon=False, labelcolor="#d0d0d0")
+        self.legend_scroll_y = 1.0
+        self.legend_scroll_min_y = 1.0
         if self.legend_obj:
             self.legend_obj.set_draggable(False)
             for text in self.legend_obj.get_texts():
                 text.set_picker(True)
             for handle in self.legend_obj.legend_handles:
                 handle.set_picker(True)
-            self.canvas_plot.mpl_connect("pick_event", self._on_legend_pick)
-            self.canvas_plot.mpl_connect("motion_notify_event", self._on_legend_hover)
+            self.canvas_plot.draw()
+            renderer = self.canvas_plot.get_renderer()
+            legend_bbox = self.legend_obj.get_window_extent(renderer=renderer)
+            axis_bbox = self.ax.get_window_extent(renderer=renderer)
+            if axis_bbox.height > 0 and legend_bbox.height > axis_bbox.height:
+                overflow_fraction = (legend_bbox.height - axis_bbox.height) / axis_bbox.height
+                self.legend_scroll_min_y = 1.0 - overflow_fraction
 
+            if self.legend_pick_cid is not None:
+                self.canvas_plot.mpl_disconnect(self.legend_pick_cid)
+            if self.legend_hover_cid is not None:
+                self.canvas_plot.mpl_disconnect(self.legend_hover_cid)
+            if self.legend_scroll_cid is not None:
+                self.canvas_plot.mpl_disconnect(self.legend_scroll_cid)
+            self.legend_pick_cid = self.canvas_plot.mpl_connect("pick_event", self._on_legend_pick)
+            self.legend_hover_cid = self.canvas_plot.mpl_connect("motion_notify_event", self._on_legend_hover)
+            self.legend_scroll_cid = self.canvas_plot.mpl_connect("scroll_event", self._on_legend_scroll)
+
+        self.canvas_plot.draw_idle()
+
+    def _on_legend_scroll(self, event):
+        if not self.legend_obj or event is None:
+            return
+        if event.inaxes != self.ax:
+            return
+        contains, _ = self.legend_obj.contains(event)
+        if not contains:
+            return
+        direction = 1 if getattr(event, "step", 0) > 0 else -1
+        step = 0.06 * direction
+        new_y = max(self.legend_scroll_min_y, min(1.0, self.legend_scroll_y + step))
+        if new_y == self.legend_scroll_y:
+            return
+        self.legend_scroll_y = new_y
+        self.legend_obj.set_bbox_to_anchor((1.01, self.legend_scroll_y))
         self.canvas_plot.draw_idle()
 
     def _on_legend_pick(self, event):

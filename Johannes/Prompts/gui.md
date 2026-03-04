@@ -53,6 +53,7 @@ Top row ratio:
 - `Animation on` (default `True`)
 - `Animation FPS` (default `30`)
 - `Update rate (episodes)` (default `1`)
+- `Frame stride` (default `2`; capture every Nth frame during replay rollout sampling)
 - `Update` button
 - environment-specific parameters below `Update`:
   - `healthy_reward`
@@ -66,6 +67,9 @@ Top row ratio:
 - second row layout: `Parameter` dropdown (left) and `Values` input (right), without additional field labels
 - compare values suggestions + `Tab` completion for categorical params (`Policy`, `Activation`, `LR strategy`)
 - compare values completion preview hint shown below the `Values` input (for example `Tab -> Tanh`)
+- show completion preview hint only when the current `Values` input has a typed prefix and a matching categorical suggestion exists
+- after `Tab` autofill, place the text cursor at the end of the inserted value in the `Values` input
+- align the completion preview hint with the `Values` input column (not under the parameter dropdown column)
 - summary lines: `Parameter: [v1, v2, ...]`
 
 Rules:
@@ -80,25 +84,27 @@ Rules:
 #### General Group Fields
 - `Max steps`
 - `Episodes`
-- `Epsilon max`
-- `Epsilon decay`
-- `Epsilon min`
-- `Gamma`
 
 #### Specific Group Fields
 - top row: `Policy`
-- row order:
-  1. `Hidden layer` | `Activation`
-  2. `LR` | `LR strategy`
-  3. `Min LR` | `LR decay`
-  4. `Replay size` | `Batch size`
-  5. `Learning start` | `Learning frequency`
-  6. `Target update`
+- shared rows first (same parameter names across all exposed policies), preserving the existing two-column arrangement where possible
+- for NN-based policies, shared rows must include at least: `gamma`, `learning_rate`, `batch_size`, `hidden_layer`, `lr_strategy`, `min_lr`, `lr_decay`
+- `hidden_layer` input accepts either a single width (for example `256`) or a comma-separated architecture (for example `256,128,64`)
+- draw a horizontal separator below shared rows
+- policy-specific rows below separator, updated dynamically when `Policy` changes
+- include only parameters that are actually consumed by the selected policy in the backend configuration
+- do not show irrelevant controls for the selected policy (for example exploration controls for deterministic continuous-control policies)
+- keep row ordering stable for shared rows and stable per-policy for specific rows
 
 Notes:
 - use scientific notation for LR text inputs
-- apply policy defaults on policy change
+- changing `Policy` should only change visible policy-specific rows/options; it must not overwrite current parameter values
+- all parameters shown in `Specific` (shared rows + policy-specific rows) must be cached per policy and restored when switching back to that policy
+- shared specific rows (`gamma`, `learning_rate`, `batch_size`, `hidden_layer`, `lr_strategy`, `min_lr`, `lr_decay`) must use per-policy values/defaults and must not leak across policies
+- parameter defaults should reset only on explicit reset actions (for example `Reset All`)
 - keep input field widths consistent within each group (same width token)
+- compare parameter dropdown should expose shared parameters and active policy-specific parameters; avoid stale/unused controls
+- add short hover tooltips for training-relevant parameters; each tooltip should explain the practical effect on learning speed, stability, exploration, or compute cost in one sentence
 
 #### Live Plot Group Fields
 - `Moving average values` (default `20`)
@@ -149,13 +155,18 @@ Control Highlight Behavior:
   - line 2: `epsilon=<...> | epsilon_decay=<...> | epsilon_min=<...>`
   - line 3: `LR=<...> | LR strategy=<...> | LR decay=<...>`
   - line 4: environment-specific params (`key=value | ...`)
+- in compare mode, append compared parameter key/value pairs to each run legend entry when they are not already represented in the base legend lines
+- avoid duplicate fields in compare legend enrichment (if a field is already shown in the base legend, do not repeat it)
 - legend interactive toggling (text + handle clickable)
 - legend hover affordance: on hover, legend entry appearance changes and cursor switches to hand to indicate clickability
+- when legend content exceeds plot height, support legend scrolling via mouse wheel while hovering the legend
+- legend run-visibility toggles should persist across subsequent plot redraws/new episode updates (do not auto-reenable hidden runs)
 - reserve right gutter for legend and keep plot left-aligned
 - subplot margins reserve legend gutter (target: `left~0.04`, `right~0.78`)
 - preserve run history until `Clear Plot`
 - legend/run labels must use immutable per-run parameter snapshots captured at run start (do not read live control values for historical runs)
 - grid/spine/tick/label/legend text colors aligned with GUI text tone
+- live plot grid must be enabled by default in runtime configuration (not only styled)
 
 ---
 
@@ -182,8 +193,12 @@ Control Highlight Behavior:
   - neutral: bg `#3a3d41`, active `#4a4f55`, pressed `#2f3338`
   - train-accent: `#0e639c`, active `#1177bb`, pressed `#0b4f7a`
   - pause-amber: `#a66a00`, active `#bf7a00`, pressed `#8c5900`
+- apply explicit neutral style to inactive action buttons (do not fall back to platform default button style)
 - combobox listbox:
   - bg `#2d2d30`, fg `#e6e6e6`, selected bg `#0e639c`, selected fg `white`
+- text insertion cursor in entry widgets should be white for visibility on dark background
+- entry/combobox field visuals should be explicitly styled to dark-mode tokens (avoid platform-default light fields)
+- disable mousewheel value changes for dropdown/combobox controls (mousewheel should not cycle selected option)
 - progressbar:
   - trough `#343434`, fill `#0e639c`
 
@@ -191,8 +206,13 @@ Control Highlight Behavior:
 
 ## GUI Robustness Tests
 - GUI smoke tests: startup, clear/reset safety, plotting/legend interaction
+- policy-switch regression: changing policy updates visible policy-specific controls/options without overwriting current entered values
+- policy-isolation regression: all `Specific` group parameters (including `gamma`, `learning_rate`, `batch_size`, `hidden_layer`, `lr_strategy`, `min_lr`, `lr_decay`) remain independent per policy across policy switches
+- reset regression: `Reset All` restores general defaults and active-policy defaults consistently
 - compare finalization consistency
 - compare render regression: with compare enabled, only the selected render run updates live animation; other runs still update plot/statistics
+- compare input regression: `Tab` autofill places caret at end of inserted value and preview hint remains aligned with value-input column
+- combobox interaction regression: mousewheel does not cycle dropdown selections
 - pause/restart regression: while paused, `Train and Run` is neutral and pressing it starts a fresh run from current parameters
 - stale-event regression: ignore worker events with non-current run/session identifiers so old runs cannot overwrite active UI state
 - shutdown regression: on reset/close, paused workers are resumed before stop so the process exits cleanly
@@ -202,4 +222,7 @@ Control Highlight Behavior:
   - status render state updates to `off`
 - animation payload regression: when episode events include multiple frames, GUI replays full sequence at configured FPS (not only latest frame)
 - animation queue regression: while playback is active, new episode payloads should not interrupt current playback; only the newest pending playback should run next
+- legend overflow regression: when legend height exceeds plot panel height, mousewheel scrolling while hovering legend moves legend content within bounded range
+- legend persistence regression: if a run is hidden via legend toggle, it remains hidden after subsequent plot redraws/episode updates until explicitly re-enabled
+- compare GPU-fallback regression: with `Device = GPU` and CUDA unavailable, compare mode remains stable using CPU-effective execution path
 - if Tk/Tcl assets are unavailable, skip with explicit reason
