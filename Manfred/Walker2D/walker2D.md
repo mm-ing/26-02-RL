@@ -1,7 +1,7 @@
 # RL-Workbench – Walker2d-v5
 
 ## Voraussetzungen
-- !!! WICHTIG !!!: Immer [workbench.md](../workbench.md) und [workbench_ui.md](../workbench_ui.md) berücksichtigen.
+- !!! WICHTIG !!!: Immer [workbench.md](../workbench.md), [workbench_ui.md](../workbench_ui.md) und [workbench_logic.md](../workbench_logic.md) berücksichtigen.
 - Alle Regeln aus beiden Dateien gelten verbindlich.
 
 ## Spezielle Anforderungen
