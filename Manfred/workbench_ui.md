@@ -22,7 +22,9 @@
 - Allgemeine RL-Parameter: Episodes (!!!default 3000), Max-Steps, Dropdown zur Auswahl von gängigen Learning-Rate-Algorithmen, Alpha, Gamma
 - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: 2x ein Label gefolgt einem Textfeld (Episodes, Max-Steps), (Alpha, Gamma)...
 #### Parameter Tuning
+- 
 - Checkbox: `Enable Parameter Tuning`: Um die aktuell ausgewählte Methode mit allen Parameter-Einstellungen aus der Liste parallel trainieren zu lassen
+- Dropdown `Method` für die Methoden-Auswahl. Wenn keine Methode ausgewählt wurde, wird die aktuelle genommen.
 - Dropdown `Parameter` für die Parameter-Auswahl zur ausgewählten Methode. Auch Hidden-Layers auswählbar!
 - Werte Textfeld `Value` zur Aufnahme eines Wertes für den gewählten Parameter. !!!Ausnahme bei Hidden-Layers, dort werden die einzelnen Schichten durch Komma getrennt.
 - möglichst zwei Felder in einer Zeile anordnen, um vertiklal Platz zu sparen: 2x ein Label gefolgt einem Textfeld
