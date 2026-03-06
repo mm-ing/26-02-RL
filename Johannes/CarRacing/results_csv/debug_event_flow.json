@@ -1,0 +1,26 @@
+{
+  "cases": [
+    {
+      "animation_on": false,
+      "vec_backend": "dummy",
+      "event_counts": {
+        "training_done": 1
+      },
+      "episodes_done": 0,
+      "cancelled": false,
+      "summary_type": "training_done",
+      "first_episode": null
+    },
+    {
+      "animation_on": true,
+      "vec_backend": "dummy",
+      "event_counts": {
+        "training_done": 1
+      },
+      "episodes_done": 0,
+      "cancelled": false,
+      "summary_type": "training_done",
+      "first_episode": null
+    }
+  ]
+}

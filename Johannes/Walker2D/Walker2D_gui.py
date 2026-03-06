@@ -199,8 +199,9 @@ class Walker2DGUI(ttk.Frame):
 
         self.var_moving_average_values = tk.IntVar(value=20)
         self.var_show_advanced = tk.BooleanVar(value=False)
-        self.var_rollout_capture_steps = tk.IntVar(value=120)
+        self.var_rollout_capture_steps = tk.IntVar(value=1000)
         self.var_low_overhead_animation = tk.BooleanVar(value=False)
+        self.var_max_steps.trace_add("write", self._on_max_steps_changed)
 
         self.var_device = tk.StringVar(value="CPU")
 
@@ -549,11 +550,11 @@ class Walker2DGUI(ttk.Frame):
         self.advanced_frame = ttk.Frame(self.live_plot_frame)
         self.advanced_frame.grid(row=1, column=0, columnspan=4, sticky="ew")
         ttk.Label(self.advanced_frame, text="Rollout full-capture steps").grid(row=0, column=0, sticky="w", padx=4, pady=2)
-        capture_steps_entry = ttk.Entry(self.advanced_frame, textvariable=self.var_rollout_capture_steps, width=9)
+        capture_steps_entry = ttk.Entry(self.advanced_frame, textvariable=self.var_rollout_capture_steps, width=9, state="readonly")
         capture_steps_entry.grid(
             row=0, column=1, sticky="ew", padx=4, pady=2
         )
-        self._bind_tooltip(capture_steps_entry, "Limits how many early rollout steps are captured for animation playback.")
+        self._bind_tooltip(capture_steps_entry, "Always mirrors Max steps; frame capture density is controlled only by Frame stride.")
         ttk.Checkbutton(self.advanced_frame, text="Low-overhead animation", variable=self.var_low_overhead_animation).grid(
             row=0, column=2, columnspan=2, sticky="w", padx=4, pady=2
         )
@@ -894,6 +895,7 @@ class Walker2DGUI(ttk.Frame):
         )
 
     def _make_train_config(self, run_id: str) -> TrainConfig:
+        max_steps = int(self.var_max_steps.get())
         shared = {
             "gamma": float(self.var_gamma.get()),
             "learning_rate": float(self.var_learning_rate.get()),
@@ -907,12 +909,12 @@ class Walker2DGUI(ttk.Frame):
         return TrainConfig(
             policy_name=self.var_policy.get(),
             episodes=int(self.var_episodes.get()),
-            max_steps=int(self.var_max_steps.get()),
+            max_steps=max_steps,
             update_rate_episodes=max(1, int(self.var_update_rate.get())),
             frame_stride=max(1, int(self.var_frame_stride.get())),
             moving_average_values=max(1, int(self.var_moving_average_values.get())),
             deterministic_eval_every=10,
-            rollout_full_capture_steps=max(1, int(self.var_rollout_capture_steps.get())),
+            rollout_full_capture_steps=max_steps,
             low_overhead_animation=bool(self.var_low_overhead_animation.get()),
             animation_on=bool(self.var_animation_on.get()),
             collect_transitions=True,
@@ -1122,7 +1124,7 @@ class Walker2DGUI(ttk.Frame):
                 frame_stride=base_train_cfg.frame_stride,
                 moving_average_values=base_train_cfg.moving_average_values,
                 deterministic_eval_every=base_train_cfg.deterministic_eval_every,
-                rollout_full_capture_steps=base_train_cfg.rollout_full_capture_steps,
+                rollout_full_capture_steps=compare_max_steps,
                 low_overhead_animation=base_train_cfg.low_overhead_animation,
                 animation_on=False,
                 collect_transitions=base_train_cfg.collect_transitions,
@@ -1231,11 +1233,19 @@ class Walker2DGUI(ttk.Frame):
         self.previous_policy = "PPO"
         self.var_moving_average_values.set(20)
         self.var_show_advanced.set(False)
-        self.var_rollout_capture_steps.set(120)
+        self.var_rollout_capture_steps.set(1000)
         self.var_low_overhead_animation.set(False)
         self.var_device.set("CPU")
         self._render_specific_fields("PPO")
         self._toggle_advanced()
+
+    def _on_max_steps_changed(self, *_args: Any) -> None:
+        try:
+            steps = max(1, int(self.var_max_steps.get()))
+        except (ValueError, tk.TclError):
+            return
+        if int(self.var_rollout_capture_steps.get()) != steps:
+            self.var_rollout_capture_steps.set(steps)
 
     def _clear_plot(self) -> None:
         self.run_plots.clear()

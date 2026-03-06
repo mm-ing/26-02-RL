@@ -1,0 +1,33 @@
+{
+  "scenario": "vec_backend_ab_full_gui",
+  "timestamp": "2026-03-05T18:49:36",
+  "warmup_runs": 1,
+  "measured_runs": 3,
+  "config": {
+    "policy": "SAC",
+    "episodes": 1,
+    "max_steps": 1000,
+    "animation_on": false,
+    "num_envs": 4,
+    "learning_starts": 0,
+    "train_freq": 1,
+    "gradient_steps": 1
+  },
+  "cases": {
+    "dummy": {
+      "runs_s": [
+        51.94,
+        58.331,
+        20.987
+      ],
+      "mean_s": 43.753,
+      "stdev_s": 19.973,
+      "min_s": 20.987,
+      "max_s": 58.331
+    },
+    "subproc": {
+      "runs_s": [],
+      "warmup_done": false
+    }
+  }
+}

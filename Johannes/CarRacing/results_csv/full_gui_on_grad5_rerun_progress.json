@@ -1,0 +1,15 @@
+{
+  "scenario": "full_gui_single_episode_1000_steps_gradient_update_rerun",
+  "policy": "SAC",
+  "episodes": 1,
+  "max_steps": 1000,
+  "animation_on": true,
+  "learning_starts": 1,
+  "train_freq": 1,
+  "gradient_steps": 1,
+  "device": "GPU",
+  "loops": 5,
+  "stage": "starting",
+  "timings_seconds": [],
+  "error": null
+}

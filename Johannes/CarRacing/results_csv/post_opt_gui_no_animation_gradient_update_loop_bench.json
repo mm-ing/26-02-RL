@@ -1,0 +1,21 @@
+{
+  "scenario": "post_opt_gui_no_animation_with_gradient_update_loop",
+  "policy": "SAC",
+  "episodes": 1,
+  "max_steps": 1000,
+  "animation_on": false,
+  "device": "GPU",
+  "learning_starts": 0,
+  "train_freq": 1,
+  "gradient_steps": 1,
+  "loops": 3,
+  "elapsed_seconds_raw": [
+    68.699,
+    68.905,
+    62.25
+  ],
+  "elapsed_seconds_mean": 66.618,
+  "elapsed_seconds_median": 68.699,
+  "elapsed_seconds_min": 62.25,
+  "elapsed_seconds_max": 68.905
+}

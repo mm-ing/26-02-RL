@@ -1,0 +1,47 @@
+{
+  "scenario": "full_gui_1ep_1000steps_gradient_update_animation_compare_5loops",
+  "timestamp": "2026-03-05T18:32:05",
+  "config": {
+    "policy": "SAC",
+    "episodes": 1,
+    "max_steps": 1000,
+    "num_envs": 4,
+    "learning_starts": 0,
+    "train_freq": 1,
+    "gradient_steps": 1,
+    "loops_per_case": 5
+  },
+  "cases": {
+    "animation_off": {
+      "runs_s": [
+        44.667,
+        46.906,
+        48.21,
+        0.751,
+        0.672
+      ],
+      "mean_s": 28.241,
+      "stdev_s": 25.163,
+      "min_s": 0.672,
+      "max_s": 48.21
+    },
+    "animation_on": {
+      "runs_s": [
+        0.431,
+        0.799,
+        0.485,
+        0.719,
+        57.062
+      ],
+      "mean_s": 11.899,
+      "stdev_s": 25.247,
+      "min_s": 0.431,
+      "max_s": 57.062
+    }
+  },
+  "comparison": {
+    "animation_on_minus_off_mean_s": -16.342,
+    "animation_on_vs_off_ratio": 0.421,
+    "faster_case": "animation_on"
+  }
+}

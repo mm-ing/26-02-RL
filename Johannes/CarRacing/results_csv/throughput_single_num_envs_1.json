@@ -1,0 +1,12 @@
+{
+  "num_envs": 1,
+  "elapsed_seconds": 76.686,
+  "throughput": {
+    "steps_per_second": 14.228287433823178,
+    "samples_per_second": 14.228287433823178,
+    "updates": 999,
+    "updates_per_second": 14.214059146389355
+  },
+  "episodes_done": 1,
+  "cancelled": false
+}

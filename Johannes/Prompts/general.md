@@ -55,6 +55,15 @@ Implementation guardrails:
 - preserve immutable per-run metadata snapshots for persisted UI artifacts (for example legend labels) so later control edits cannot overwrite historical run descriptions
 - for user-facing parameter hints/tooltips, keep copy concise and effect-oriented (what changes in training dynamics or compute), avoiding algorithm-specific jargon when not required
 
+### Animation Performance Mode (Default)
+For training-time animation in GUI projects, use this default behavior unless a project-specific file explicitly overrides it:
+- capture animation frames during the training loop via callback/event hooks (reuse training steps)
+- avoid separate post-episode rollout runs solely for animation
+- use `Update rate (episodes)` to select which episodes emit animation buffers
+- use `Frame stride` to control per-episode frame sampling density
+- playback must be non-blocking relative to worker training loops
+- when playback is active, keep only one pending animation buffer and apply newest-buffer overwrite (`latest-wins`)
+
 ---
 
 ## Project Output Structure
@@ -90,6 +99,19 @@ Process rules:
 - update matrix after each implementation/testing pass
 - before handoff, high-impact blockers must be resolved or explicitly justified
 - matrix must reflect latest isolated test run outcome
+
+### Mandatory Final Contract Recheck (All Future Projects)
+Before handoff, always run a final contract recheck against:
+1. `general.md`
+2. `logic.md`
+3. `gui.md`
+4. the project-specific file
+
+Recheck process requirements:
+- verify each contractual requirement as `✅ Implemented`, `🟡 Partial`, or `❌ Missing`
+- ensure no matrix row is marked `✅ Implemented` unless the code and tests both support it
+- explicitly list any remaining high-impact gaps with concrete remediation notes
+- update the requirements matrix in the project directory to reflect this final audit
 
 ---
 

@@ -1,0 +1,14 @@
+{
+  "scenario": "full_gui_single_benchmark",
+  "timestamp": "2026-03-05T19:01:39",
+  "config": {
+    "episodes": 1,
+    "max_steps": 1000,
+    "animation_on": false,
+    "policy": "SAC",
+    "num_envs": 4,
+    "vec_backend": "dummy",
+    "device": "GPU"
+  },
+  "elapsed_seconds": 23.817
+}

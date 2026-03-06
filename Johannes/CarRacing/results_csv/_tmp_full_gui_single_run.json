@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "elapsed_seconds": 101.288,
+  "policy": "SAC",
+  "episodes": 1,
+  "max_steps": 1000,
+  "animation_on": true,
+  "learning_starts": 1,
+  "device": "GPU"
+}

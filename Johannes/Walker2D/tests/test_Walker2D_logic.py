@@ -140,7 +140,7 @@ def test_export_transitions_csv_contains_expected_columns(monkeypatch, tmp_path)
     assert len(rows) >= 1
 
 
-def test_evaluate_policy_uses_capped_eval_max_steps(monkeypatch):
+def test_evaluate_policy_uses_max_steps(monkeypatch):
     monkeypatch.setattr("Walker2D_logic.gym.make", lambda *args, **kwargs: DummyEnv(**kwargs))
 
     trainer = Walker2DTrainer(
@@ -160,7 +160,7 @@ def test_evaluate_policy_uses_capped_eval_max_steps(monkeypatch):
     monkeypatch.setattr(trainer, "run_episode", capturing_run_episode)
 
     _ = trainer.evaluate_policy(episodes=1)
-    assert captured["max_steps"] == 123
+    assert captured["max_steps"] == 1000
 
 
 def test_model_uses_hidden_layer_and_lr_schedule(monkeypatch):
@@ -235,3 +235,25 @@ def test_model_uses_comma_separated_hidden_layers(monkeypatch):
 
     policy_kwargs = captured.get("policy_kwargs", {})
     assert policy_kwargs.get("net_arch") == [512, 256, 128]
+
+
+def test_run_episode_capture_horizon_follows_max_steps_not_rollout_limit(monkeypatch):
+    monkeypatch.setattr("Walker2D_logic.gym.make", lambda *args, **kwargs: DummyEnv(**kwargs))
+
+    trainer = Walker2DTrainer(
+        env_config=Walker2DEnvConfig(env_id="Dummy-v0"),
+        train_config=TrainConfig(policy_name="PPO", episodes=1, max_steps=10, animation_on=True),
+    )
+
+    result = trainer.run_episode(
+        model=DummyModel(),
+        deterministic=True,
+        collect_transitions=False,
+        max_steps=10,
+        render=True,
+        frame_stride=1,
+        rollout_full_capture_steps=1,
+    )
+
+    assert result["steps"] == 3
+    assert len(result["frames"]) == 3

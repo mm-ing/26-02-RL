@@ -1,0 +1,10 @@
+{
+    "scenario": "post_opt_plot_path_batch_episode_updates_loop",
+    "episodes_simulated": 300,
+    "loops": 3,
+    "elapsed_seconds_raw": [0.3255, 0.2703, 0.2693],
+    "elapsed_seconds_mean": 0.2884,
+    "elapsed_seconds_median": 0.2703,
+    "elapsed_seconds_min": 0.2693,
+    "elapsed_seconds_max": 0.3255
+}

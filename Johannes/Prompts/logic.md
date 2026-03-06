@@ -40,7 +40,7 @@ Event contract baseline (logic-to-GUI bridge):
 - reinitialize weights for each new `Train and Run`
 - separate deterministic evaluation from exploration episodes
 - tune per-policy defaults for the target environment
-- for exposed NN-based policies, support shared NN parameter controls (`hidden_layer`, `lr_strategy`, `min_lr`, `lr_decay`) and apply them in model construction
+- for exposed NN-based policies, support shared NN parameter controls (`hidden_layer`, `activation`, `lr_strategy`, `min_lr`, `lr_decay`) and apply them in model construction
 - hidden-layer controls should affect policy network architecture (for example `policy_kwargs.net_arch` for SB3 MLP policies)
 - hidden-layer parsing rule:
 	- single value (for example `256`) maps to symmetric two-layer `[256, 256]`
@@ -81,10 +81,13 @@ Use `Update rate (episodes)` as gating interval:
 - animation updates on every Nth episode (and final episode)
 - live plot refresh every episode
 - replay frame capture uses fixed stride `Frame stride = N` (default `2`): capture first step and then every Nth step
-- when animation is enabled, rollout environment must be created with render mode supporting frame extraction (`rgb_array`)
-- during training animation, capture and emit a sampled frame sequence for replay (not a single final frame only)
+- replay full-capture horizon should always be `max_steps`; `Frame stride` alone controls whether every step (`1`) or every Nth step is captured
+- when animation is enabled, training environment must support frame extraction (`rgb_array`)
+- capture animation frames during the training loop via callback/event hook (reuse training steps); avoid a separate post-episode rollout for animation
+- during training animation, emit a full sampled frame sequence per selected episode (not a single final frame only)
 - replay queue behavior: allow at most one pending playback while one is active; if newer frames arrive, replace pending playback with newest (`latest-wins`) and keep current playback uninterrupted
 - deterministic evaluation rollouts/plot points should run on a fixed cadence of every 10th episode
+- deterministic evaluation horizon should always be coupled to `max_steps`
 
 ---
 
@@ -121,7 +124,7 @@ Use `Update rate (episodes)` as gating interval:
 - verify compare-policy baseline behavior: each compared policy starts from its own defaults before explicit compare overrides
 - verify compare-policy override applicability: policy-incompatible compare parameters are ignored safely
 - verify compare worker CPU thread budgeting distributes core budget as expected
-- verify policy snapshot isolation: shared specific parameters (`gamma`, `learning_rate`, `batch_size`, `hidden_layer`, `lr_strategy`, `min_lr`, `lr_decay`) and policy-specific parameters remain independent across policy switches
+- verify policy snapshot isolation: shared specific parameters (`gamma`, `learning_rate`, `batch_size`, `hidden_layer`, `activation`, `lr_strategy`, `min_lr`, `lr_decay`) and policy-specific parameters remain independent across policy switches
 - verify NN parameter wiring: hidden-layer and LR schedule controls are consumed by logic/model construction for all exposed NN policies
 
 Use this test isolation setup (required in multi-project workspaces):

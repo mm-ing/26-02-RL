@@ -1,0 +1,27 @@
+{
+  "scenario": "trainer_throughput_num_envs_matrix",
+  "policy": "SAC",
+  "episodes": 1,
+  "max_steps": 1000,
+  "animation_on": false,
+  "device": "GPU",
+  "learning_starts": 0,
+  "train_freq": 1,
+  "gradient_steps": 1,
+  "loops_per_num_envs": 3,
+  "matrix": {
+    "num_envs_1": {
+      "runs": [
+        {
+          "elapsed_seconds": 78.941,
+          "steps_per_second": 13.41319585915508,
+          "samples_per_second": 13.41319585915508,
+          "updates": 999,
+          "updates_per_second": 13.399782663295925,
+          "episodes_done": 1,
+          "cancelled": false
+        }
+      ]
+    }
+  }
+}
