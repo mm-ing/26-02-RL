@@ -157,6 +157,7 @@ class TrainerConfig:
     epsilon_min: float = GENERAL_DEFAULTS["epsilon_min"]
     moving_average_values: int = 20
     update_rate_episodes: int = 5
+    frame_capture_stride: int = 2
     animation_on: bool = True
     rollout_full_capture_steps: int = 120
     low_overhead_animation: bool = False
@@ -308,6 +309,8 @@ class HalfCheetahTrainer:
         self.pause_event.set()
         self.transitions: List[Dict[str, Any]] = []
         self.current_env_wrapper: Optional[HalfCheetahEnvironment] = None
+        self._animation_state_lock = threading.Lock()
+        self._animation_enabled: Optional[bool] = None
 
     def _emit(self, event_type: str, payload: Dict[str, Any]):
         event = {"type": event_type}
@@ -324,6 +327,16 @@ class HalfCheetahTrainer:
 
     def resume(self):
         self.pause_event.set()
+
+    def set_animation_enabled(self, enabled: bool):
+        with self._animation_state_lock:
+            self._animation_enabled = bool(enabled)
+
+    def is_animation_enabled(self, default_enabled: bool = True) -> bool:
+        with self._animation_state_lock:
+            if self._animation_enabled is None:
+                return bool(default_enabled)
+            return bool(self._animation_enabled)
 
     def rebuild_environment(self, env_params: Optional[Dict[str, Any]] = None, render_mode: Optional[str] = "rgb_array"):
         if self.current_env_wrapper is None:
@@ -342,6 +355,7 @@ class HalfCheetahTrainer:
         collect_transitions: bool = False,
         animation_on: bool = False,
         capture_replay_frames: bool = True,
+        frame_capture_stride: int = 2,
         rollout_full_capture_steps: int = 120,
         low_overhead_animation: bool = False,
     ) -> Dict[str, Any]:
@@ -352,19 +366,7 @@ class HalfCheetahTrainer:
         render_state = "off"
         latest_frame = None
         frames: List[Any] = []
-
-        full_capture = max(5, int(rollout_full_capture_steps))
-
-        def _frame_stride(step: int) -> int:
-            if step <= full_capture:
-                return 1
-            if bool(low_overhead_animation):
-                return 10
-            if step <= full_capture * 2:
-                return 2
-            if step <= full_capture * 3:
-                return 3
-            return 5
+        capture_stride = max(1, int(frame_capture_stride))
 
         for step_idx in range(1, max_steps + 1):
             if self.stop_event.is_set():
@@ -391,8 +393,7 @@ class HalfCheetahTrainer:
             if animation_on:
                 try:
                     if capture_replay_frames:
-                        stride = _frame_stride(step_idx)
-                        if step_idx <= full_capture or step_idx % stride == 0:
+                        if step_idx == 1 or step_idx % capture_stride == 0:
                             latest_frame = env.render()
                             if latest_frame is not None:
                                 frames.append(latest_frame)
@@ -479,7 +480,8 @@ class HalfCheetahTrainer:
                     break
 
                 model.learn(total_timesteps=config.max_steps, reset_num_timesteps=False, progress_bar=False)
-                should_replay = bool(config.animation_on and (episode % max(1, config.update_rate_episodes) == 0 or episode == config.episodes))
+                effective_animation_on = bool(config.animation_on and self.is_animation_enabled(default_enabled=True))
+                should_replay = bool(effective_animation_on and (episode % max(1, config.update_rate_episodes) == 0 or episode == config.episodes))
 
                 rollout = self.run_episode(
                     model=model,
@@ -487,8 +489,9 @@ class HalfCheetahTrainer:
                     max_steps=config.max_steps,
                     deterministic=False,
                     collect_transitions=False,
-                    animation_on=bool(config.animation_on),
+                    animation_on=effective_animation_on,
                     capture_replay_frames=should_replay,
+                    frame_capture_stride=max(1, int(config.frame_capture_stride)),
                     rollout_full_capture_steps=int(config.rollout_full_capture_steps),
                     low_overhead_animation=bool(config.low_overhead_animation),
                 )
@@ -599,6 +602,10 @@ def build_compare_runs(base_config: Dict[str, Any], compare_map: Dict[str, List[
 
 
 def cap_torch_cpu_threads(max_threads: int = 1):
+    os.environ["OMP_NUM_THREADS"] = str(max(1, int(max_threads)))
+    os.environ["MKL_NUM_THREADS"] = str(max(1, int(max_threads)))
+    os.environ["OPENBLAS_NUM_THREADS"] = str(max(1, int(max_threads)))
+    os.environ["NUMEXPR_NUM_THREADS"] = str(max(1, int(max_threads)))
     if torch is None:
         return
     try:

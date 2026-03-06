@@ -53,6 +53,7 @@ Implementation guardrails:
 - when multiple worker threads share mutable GUI-side worker registries, protect registry mutation/read with a lock to avoid race conditions in pause/cancel paths
 - keep GUI animation replay decoupled from training progress; replay scheduling must never block or restart worker training loops
 - preserve immutable per-run metadata snapshots for persisted UI artifacts (for example legend labels) so later control edits cannot overwrite historical run descriptions
+- for user-facing parameter hints/tooltips, keep copy concise and effect-oriented (what changes in training dynamics or compute), avoiding algorithm-specific jargon when not required
 
 ---
 
@@ -61,11 +62,34 @@ Create (using `<project_name>` from the project-specific file):
 - `<project_name>_app.py`
 - `<project_name>_logic.py`
 - `<project_name>_gui.py`
+- `<project_name>_REQUIREMENTS_MATRIX.md`
 - `tests/test_<project_name>_logic.py`
 - `tests/test_<project_name>_gui.py`
 - `requirements.txt`
 - `README.md`
 - output folders: `results_csv/`, `plots/`
+
+---
+
+## Requirements Matrix Governance (Required)
+For every generated project, create and maintain `<project_name>_REQUIREMENTS_MATRIX.md`.
+
+Minimum matrix structure:
+- `GUI Contract Coverage` table (`Area`, `Requirement`, `Status`, `Notes`)
+- `Logic Contract Coverage` table (`Area`, `Requirement`, `Status`, `Notes`)
+- `Test Coverage` table (`Area`, `Status`, `Notes`)
+- `High-Impact Open Gaps` section
+
+Status values:
+- `✅ Implemented`
+- `🟡 Partial`
+- `❌ Missing`
+
+Process rules:
+- initialize matrix at project bootstrap
+- update matrix after each implementation/testing pass
+- before handoff, high-impact blockers must be resolved or explicitly justified
+- matrix must reflect latest isolated test run outcome
 
 ---
 

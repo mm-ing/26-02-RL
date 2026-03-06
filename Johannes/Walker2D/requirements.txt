@@ -1,0 +1,7 @@
+stable-baselines3
+torch
+sb3-contrib
+gymnasium[mujoco]
+matplotlib
+pillow
+pytest
