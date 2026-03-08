@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-03-05T15:48:35",
+  "protocol": {
+    "warmup_runs": 1,
+    "measured_runs": 5,
+    "episodes": 1,
+    "max_steps": 1000
+  },
+  "baseline_file": "results_csv\\benchmark_harness_robust_20260305_135048.json",
+  "baseline": {
+    "animation_off_mean_s": 17.35,
+    "animation_on_mean_s": 28.59
+  },
+  "current": {
+    "animation_off_mean_s": 20.62,
+    "animation_on_mean_s": 33.37,
+    "animation_off_runs_s": [
+      19.28,
+      21.28,
+      20.76,
+      20.57,
+      21.21
+    ],
+    "animation_on_runs_s": [
+      34.31,
+      34.75,
+      32.59,
+      31.87,
+      33.34
+    ]
+  },
+  "delta_percent_current_vs_baseline": {
+    "animation_off": 18.85,
+    "animation_on": 16.72
+  }
+}

@@ -75,7 +75,7 @@ For every new RL project in this workspace:
 | Trainer API | `run_episode`, `train`, `evaluate_policy`, env rebuild/update | ✅ | Implemented. |
 | Event types | `episode`, `training_done`, `error` (+ `step` bridge) | ✅ | Implemented. |
 | Episode payload | includes required keys + frames | ✅ | Implemented with `frames` and compatibility `frame`. |
-| Deterministic eval cadence | Every 10th episode | ✅ | `deterministic_eval_every=10` used by default. |
+| Deterministic eval cadence | Every 10th episode | ✅ | `deterministic_eval_every=10` used by default; deterministic evaluation steps are always coupled to `max_steps`. |
 | Device behavior | CPU/GPU selectable with safe fallback | ✅ | GPU falls back to CPU if CUDA unavailable. |
 | PPO constraints | `n_steps >= batch_size` + divisibility adjustment | ✅ | Implemented. |
 | NN policy kwargs | Shared hidden-layer architecture applied to all SB3 policies via `policy_kwargs.net_arch` | ✅ | Implemented for PPO/SAC/TD3 with parsing rules: single value `256` -> `[256,256]`, comma-separated `256,128,64` -> `[256,128,64]` (with safe fallback to defaults). |

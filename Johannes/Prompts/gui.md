@@ -34,8 +34,9 @@ Top row ratio:
 - keep aspect ratio and center image
 - redraw on resize
 - render on main thread only
-- for training animation, replay rollout frame sequences at `Animation FPS` (no single-frame-only behavior)
+- for training animation, replay per-episode frame buffers captured during training at `Animation FPS` (no single-frame-only behavior)
 - replay queue semantics: if a playback is active, keep it running and store only one pending playback slot; incoming newer playback replaces pending slot (`latest-wins`)
+- playback must not block worker training loops; first episode playback can run while the next episodes continue training
 
 ### Parameters Panel
 - scrollable content region
@@ -55,9 +56,7 @@ Top row ratio:
 - `Update rate (episodes)` (default `1`)
 - `Frame stride` (default `2`; capture every Nth frame during replay rollout sampling)
 - `Update` button
-- environment-specific parameters below `Update`:
-  - `healthy_reward`
-  - `reset_noise_scale`
+- environment-specific parameters below `Update` must come from the project-specific file (do not hard-code unrelated environment keys)
 
 #### Compare Group Fields
 - `Compare on` toggle
@@ -80,6 +79,7 @@ Rules:
 - include all `General` + `Specific` parameters in compare dropdown; exclude `Environment`
 - allow accepting categorical suggestion with `Tab` based on typed prefix
 - when compare mode runs multiple workers, only one selected run should feed live animation/playback (selected policy preferred; fallback first run)
+- if training outpaces playback, pending animation should keep only the newest completed episode buffer (overwrite older pending episode buffers)
 
 #### General Group Fields
 - `Max steps`
@@ -88,8 +88,10 @@ Rules:
 #### Specific Group Fields
 - top row: `Policy`
 - shared rows first (same parameter names across all exposed policies), preserving the existing two-column arrangement where possible
-- for NN-based policies, shared rows must include at least: `gamma`, `learning_rate`, `batch_size`, `hidden_layer`, `lr_strategy`, `min_lr`, `lr_decay`
+- for NN-based policies, shared rows must include at least: `gamma`, `learning_rate`, `batch_size`, `hidden_layer`, `activation`, `lr_strategy`, `min_lr`, `lr_decay`
 - `hidden_layer` input accepts either a single width (for example `256`) or a comma-separated architecture (for example `256,128,64`)
+- `activation` must be a selector (`ReLU`, `Tanh`)
+- `lr_strategy` must be a selector (`constant`, `linear`, `exponential`)
 - draw a horizontal separator below shared rows
 - policy-specific rows below separator, updated dynamically when `Policy` changes
 - include only parameters that are actually consumed by the selected policy in the backend configuration
@@ -103,15 +105,13 @@ Notes:
 - shared specific rows (`gamma`, `learning_rate`, `batch_size`, `hidden_layer`, `lr_strategy`, `min_lr`, `lr_decay`) must use per-policy values/defaults and must not leak across policies
 - parameter defaults should reset only on explicit reset actions (for example `Reset All`)
 - keep input field widths consistent within each group (same width token)
+- implement consistent field sizing with a fixed label column and a shared expandable input column so label length does not shrink input controls
 - compare parameter dropdown should expose shared parameters and active policy-specific parameters; avoid stale/unused controls
 - add short hover tooltips for training-relevant parameters; each tooltip should explain the practical effect on learning speed, stability, exploration, or compute cost in one sentence
 
 #### Live Plot Group Fields
 - `Moving average values` (default `20`)
-- `Show Advanced` toggle (default `False`)
-- advanced fields:
-  - `Rollout full-capture steps` (default `120`)
-  - `Low-overhead animation` (default `False`)
+- do not add extra advanced controls for capture count; replay capture density is controlled by `Frame stride`
 
 ### Controls Row
 Exactly 8 equal-width controls in this order:
@@ -134,6 +134,7 @@ Control Highlight Behavior:
 ### Current Run Panel
 - `Steps` label + progress bar
 - `Episodes` label + progress bar
+- place `Episodes` progress row below the `Steps` progress row
 - steps progress advances during replay animation playback only
 - status line format:
   - `Epsilon: <...> | LR: <...> | Best reward: <...> | Render: <off|on|skipped|idle>`
@@ -208,6 +209,8 @@ Control Highlight Behavior:
 - GUI smoke tests: startup, clear/reset safety, plotting/legend interaction
 - policy-switch regression: changing policy updates visible policy-specific controls/options without overwriting current entered values
 - policy-isolation regression: all `Specific` group parameters (including `gamma`, `learning_rate`, `batch_size`, `hidden_layer`, `lr_strategy`, `min_lr`, `lr_decay`) remain independent per policy across policy switches
+- selector regression: `activation` and `lr_strategy` controls are readonly selectors with expected option sets
+- specific-layout regression: shared rows are above separator and policy-specific rows are below separator
 - reset regression: `Reset All` restores general defaults and active-policy defaults consistently
 - compare finalization consistency
 - compare render regression: with compare enabled, only the selected render run updates live animation; other runs still update plot/statistics

@@ -1,0 +1,62 @@
+{
+  "scenario": "full_gui_gradient_step_single_episode_num_envs_matrix",
+  "policy": "SAC",
+  "episodes": 1,
+  "max_steps": 1000,
+  "animation_on": false,
+  "device": "GPU",
+  "learning_starts": 0,
+  "train_freq": 1,
+  "gradient_steps": 1,
+  "loops_per_num_envs": 3,
+  "matrix": {
+    "num_envs_1": {
+      "num_envs": 1,
+      "elapsed_seconds_raw": [
+        76.418,
+        89.097,
+        2.601
+      ],
+      "summary": {
+        "runs": 3,
+        "mean_s": 56.039,
+        "median_s": 76.418,
+        "min_s": 2.601,
+        "max_s": 89.097
+      },
+      "errors": []
+    },
+    "num_envs_2": {
+      "num_envs": 2,
+      "elapsed_seconds_raw": [
+        50.864,
+        2.101,
+        0.322
+      ],
+      "summary": {
+        "runs": 3,
+        "mean_s": 17.762,
+        "median_s": 2.101,
+        "min_s": 0.322,
+        "max_s": 50.864
+      },
+      "errors": []
+    },
+    "num_envs_4": {
+      "num_envs": 4,
+      "elapsed_seconds_raw": [
+        0.296,
+        0.308,
+        0.357
+      ],
+      "summary": {
+        "runs": 3,
+        "mean_s": 0.32,
+        "median_s": 0.308,
+        "min_s": 0.296,
+        "max_s": 0.357
+      },
+      "errors": []
+    }
+  }
+}

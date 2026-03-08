@@ -1,0 +1,10 @@
+{
+  "elapsed_seconds": 24.357,
+  "episodes_done": 1,
+  "event_counts": {
+    "episode": 1,
+    "animation": 0,
+    "training_done": 1,
+    "error": 0
+  }
+}

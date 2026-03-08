@@ -1,0 +1,34 @@
+{
+  "scenario": "single_episode_end_to_end_loop",
+  "policy": "SAC",
+  "episodes": 1,
+  "max_steps": 1000,
+  "animation_on": false,
+  "device": "GPU",
+  "loops": 3,
+  "direct_seconds_raw": [
+    23.581,
+    20.54,
+    16.956
+  ],
+  "gui_seconds_raw": [
+    19.453,
+    21.868,
+    17.822
+  ],
+  "direct_summary": {
+    "runs": 3,
+    "min_s": 16.956,
+    "max_s": 23.581,
+    "mean_s": 20.359,
+    "median_s": 20.54
+  },
+  "gui_summary": {
+    "runs": 3,
+    "min_s": 17.822,
+    "max_s": 21.868,
+    "mean_s": 19.715,
+    "median_s": 19.453
+  },
+  "gui_overhead_percent_vs_direct_mean": -3.16
+}

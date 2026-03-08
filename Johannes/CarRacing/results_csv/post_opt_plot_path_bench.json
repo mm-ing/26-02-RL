@@ -1,0 +1,5 @@
+{
+  "scenario": "post_opt_plot_path_batch_episode_updates",
+  "episodes_simulated": 300,
+  "elapsed_seconds": 0.3365
+}

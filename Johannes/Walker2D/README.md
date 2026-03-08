@@ -18,6 +18,9 @@ Walker2D training UI using Stable-Baselines3 with Gymnasium `Walker2d-v5`.
 - Episodes default: `1000`
 - Max steps default: `1000`
 - Device default: `CPU`
+- Deterministic evaluation cadence default: every `10` episodes
+- Deterministic evaluation steps: always equal to `Max steps`
+- Rollout full-capture steps: always equal to `Max steps` (frame sampling density controlled by `Frame stride`)
 
 ### Specific Group (shared across NN policies, policy-scoped values)
 - `gamma`

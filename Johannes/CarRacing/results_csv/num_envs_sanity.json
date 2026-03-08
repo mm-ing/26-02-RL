@@ -1,0 +1,9 @@
+{
+  "episodes_done": 0,
+  "cancelled": false,
+  "event_counts": {
+    "episode": 0,
+    "training_done": 1,
+    "error": 0
+  }
+}

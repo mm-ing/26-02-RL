@@ -1,0 +1,93 @@
+{
+  "timestamp": "2026-03-05T13:50:48",
+  "benchmark": {
+    "timestamp": "2026-03-05T13:46:09",
+    "warmup_runs": 1,
+    "measured_runs": 5,
+    "episodes": 1,
+    "max_steps": 1000,
+    "cases": {
+      "animation_off": {
+        "runs_s": [
+          16.45,
+          18.7,
+          17.51,
+          17.35,
+          16.73
+        ],
+        "mean_s": 17.35,
+        "stdev_s": 0.87,
+        "min_s": 16.45,
+        "max_s": 18.7
+      },
+      "animation_on": {
+        "runs_s": [
+          28.21,
+          28.24,
+          29.87,
+          28.92,
+          27.71
+        ],
+        "mean_s": 28.59,
+        "stdev_s": 0.84,
+        "min_s": 27.71,
+        "max_s": 29.87
+      }
+    }
+  },
+  "robust": {
+    "animation_off": {
+      "raw_runs_s": [
+        16.45,
+        18.7,
+        17.51,
+        17.35,
+        16.73
+      ],
+      "q1": 16.73,
+      "q3": 17.51,
+      "iqr": 0.78,
+      "low_fence": 15.56,
+      "high_fence": 18.68,
+      "kept_runs_s": [
+        16.45,
+        17.51,
+        17.35,
+        16.73
+      ],
+      "dropped_runs_s": [
+        18.7
+      ],
+      "kept_mean_s": 17.01,
+      "kept_stdev_s": 0.5,
+      "kept_min_s": 16.45,
+      "kept_max_s": 17.51
+    },
+    "animation_on": {
+      "raw_runs_s": [
+        28.21,
+        28.24,
+        29.87,
+        28.92,
+        27.71
+      ],
+      "q1": 28.21,
+      "q3": 28.92,
+      "iqr": 0.71,
+      "low_fence": 27.145,
+      "high_fence": 29.985,
+      "kept_runs_s": [
+        28.21,
+        28.24,
+        29.87,
+        28.92,
+        27.71
+      ],
+      "dropped_runs_s": [],
+      "kept_mean_s": 28.59,
+      "kept_stdev_s": 0.83,
+      "kept_min_s": 27.71,
+      "kept_max_s": 29.87
+    }
+  }
+}

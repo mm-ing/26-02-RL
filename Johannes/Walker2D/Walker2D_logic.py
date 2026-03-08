@@ -182,8 +182,8 @@ class TrainConfig:
     frame_stride: int = 2
     moving_average_values: int = 20
     deterministic_eval_every: int = 10
-    deterministic_eval_max_steps: int = 300
-    rollout_full_capture_steps: int = 120
+    deterministic_eval_max_steps: int = 1000
+    rollout_full_capture_steps: int = 1000
     low_overhead_animation: bool = False
     animation_on: bool = True
     collect_transitions: bool = False
@@ -376,7 +376,7 @@ class Walker2DTrainer:
         frames: List[np.ndarray] = []
         max_steps = int(max_steps or self.train_config.max_steps)
         stride = max(1, int(frame_stride))
-        capture_limit = max(1, int(rollout_full_capture_steps))
+        capture_limit = max_steps
 
         try:
             while steps < max_steps:
@@ -442,7 +442,7 @@ class Walker2DTrainer:
                 model=self._model,
                 deterministic=True,
                 collect_transitions=False,
-                max_steps=min(self.train_config.max_steps, max(1, int(self.train_config.deterministic_eval_max_steps))),
+                max_steps=self.train_config.max_steps,
                 render=False,
                 frame_stride=self.train_config.frame_stride,
                 rollout_full_capture_steps=self.train_config.rollout_full_capture_steps,

@@ -1,0 +1,53 @@
+{
+  "scenario": "single_gui_session_full_gui_1ep_1000steps_gradient_warmup_plus_5_anim_on_and_off",
+  "anim_on": {
+    "policy": "SAC",
+    "episodes": 1,
+    "max_steps": 1000,
+    "animation_on": true,
+    "learning_starts": 1,
+    "train_freq": 1,
+    "gradient_steps": 1,
+    "device": "GPU",
+    "gui_startups": 1,
+    "warmup_runs_discarded": 1,
+    "warmup_timings_seconds": [
+      30.722
+    ],
+    "measured_runs": 5,
+    "measured_timings_seconds": [
+      27.531,
+      26.844,
+      27.306,
+      27.303,
+      27.777
+    ],
+    "measured_mean_seconds": 27.352,
+    "measured_std_seconds": 0.345
+  },
+  "anim_off": {
+    "policy": "SAC",
+    "episodes": 1,
+    "max_steps": 1000,
+    "animation_on": false,
+    "learning_starts": 1,
+    "train_freq": 1,
+    "gradient_steps": 1,
+    "device": "GPU",
+    "gui_startups": 1,
+    "warmup_runs_discarded": 1,
+    "warmup_timings_seconds": [
+      28.121
+    ],
+    "measured_runs": 5,
+    "measured_timings_seconds": [
+      27.282,
+      28.735,
+      28.542,
+      1.462,
+      31.871
+    ],
+    "measured_mean_seconds": 23.578,
+    "measured_std_seconds": 12.478
+  }
+}

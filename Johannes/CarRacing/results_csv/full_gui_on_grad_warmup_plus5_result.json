@@ -1,0 +1,25 @@
+{
+  "scenario": "full_gui_single_episode_1000_steps_gradient_update_warmup_plus_5",
+  "policy": "SAC",
+  "episodes": 1,
+  "max_steps": 1000,
+  "animation_on": true,
+  "learning_starts": 1,
+  "train_freq": 1,
+  "gradient_steps": 1,
+  "device": "GPU",
+  "warmup_runs_discarded": 1,
+  "warmup_timings_seconds": [
+    93.69
+  ],
+  "measured_runs": 5,
+  "measured_timings_seconds": [
+    98.589,
+    90.649,
+    92.38,
+    99.773,
+    103.336
+  ],
+  "measured_mean_seconds": 96.946,
+  "measured_std_seconds": 5.292
+}

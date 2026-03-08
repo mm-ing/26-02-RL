@@ -1,0 +1,41 @@
+{
+  "timestamp": "2026-03-05T14:09:24",
+  "protocol": {
+    "compare_items": {
+      "Policy": [
+        "SAC",
+        "PPO",
+        "TD3",
+        "DDQN"
+      ]
+    },
+    "animation_on": false,
+    "episodes": 1,
+    "max_steps": 1000,
+    "warmup": 1,
+    "measured": 3
+  },
+  "batch_compare_off": {
+    "runs_s": [
+      81.54,
+      80.47,
+      84.29
+    ],
+    "mean_s": 82.1,
+    "stdev_s": 1.97,
+    "min_s": 80.47,
+    "max_s": 84.29
+  },
+  "batch_compare_on": {
+    "runs_s": [
+      81.8,
+      79.73,
+      76.36
+    ],
+    "mean_s": 79.3,
+    "stdev_s": 2.74,
+    "min_s": 76.36,
+    "max_s": 81.8
+  },
+  "delta_percent_on_vs_off": -3.41
+}

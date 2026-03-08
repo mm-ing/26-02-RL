@@ -1,0 +1,11 @@
+{
+  "scenario": "single_episode_end_to_end",
+  "policy": "SAC",
+  "episodes": 1,
+  "max_steps": 1000,
+  "animation_on": false,
+  "device": "GPU",
+  "direct_seconds": 23.051,
+  "gui_seconds": 21.499,
+  "gui_overhead_percent_vs_direct": -6.73
+}

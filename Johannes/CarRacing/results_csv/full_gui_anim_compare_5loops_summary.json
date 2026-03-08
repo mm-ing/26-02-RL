@@ -1,0 +1,49 @@
+{
+  "source": "results_csv\\full_gui_anim_compare_5loops_progress.json",
+  "config": {
+    "policy": "SAC",
+    "episodes": 1,
+    "max_steps": 1000,
+    "num_envs": 4,
+    "learning_starts": 0,
+    "train_freq": 1,
+    "gradient_steps": 1,
+    "loops_per_case": 5
+  },
+  "raw": {
+    "animation_off": {
+      "runs": 5,
+      "mean_s": 43.748,
+      "stdev_s": 4.819,
+      "min_s": 36.015,
+      "max_s": 48.546
+    },
+    "animation_on": {
+      "runs": 4,
+      "mean_s": 52.07,
+      "stdev_s": 5.665,
+      "min_s": 46.92,
+      "max_s": 58.654
+    },
+    "delta_on_minus_off_s": 8.322,
+    "ratio_on_vs_off": 1.19
+  },
+  "filtered_ge_10s": {
+    "animation_off": {
+      "runs": 5,
+      "mean_s": 43.748,
+      "stdev_s": 4.819,
+      "min_s": 36.015,
+      "max_s": 48.546
+    },
+    "animation_on": {
+      "runs": 4,
+      "mean_s": 52.07,
+      "stdev_s": 5.665,
+      "min_s": 46.92,
+      "max_s": 58.654
+    },
+    "delta_on_minus_off_s": 8.322,
+    "ratio_on_vs_off": 1.19
+  }
+}

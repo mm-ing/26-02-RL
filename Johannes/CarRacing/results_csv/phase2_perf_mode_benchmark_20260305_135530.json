@@ -1,0 +1,37 @@
+{
+  "timestamp": "2026-03-05T13:55:30",
+  "protocol": {
+    "animation_on": false,
+    "episodes": 1,
+    "max_steps": 1000,
+    "warmup": 1,
+    "measured": 5
+  },
+  "performance_mode_off": {
+    "runs_s": [
+      15.72,
+      16.39,
+      17.38,
+      16.27,
+      16.96
+    ],
+    "mean_s": 16.54,
+    "stdev_s": 0.64,
+    "min_s": 15.72,
+    "max_s": 17.38
+  },
+  "performance_mode_on": {
+    "runs_s": [
+      18.45,
+      18.99,
+      17.08,
+      19.82,
+      16.42
+    ],
+    "mean_s": 18.15,
+    "stdev_s": 1.39,
+    "min_s": 16.42,
+    "max_s": 19.82
+  },
+  "delta_percent_on_vs_off": 9.73
+}

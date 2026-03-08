@@ -1,0 +1,35 @@
+{
+  "timestamp": "2026-03-05T13:24:05",
+  "warmup_runs": 1,
+  "measured_runs": 5,
+  "episodes": 1,
+  "max_steps": 1000,
+  "cases": {
+    "animation_off": {
+      "runs_s": [
+        20.11,
+        20.95,
+        22.04,
+        21.67,
+        21.29
+      ],
+      "mean_s": 21.21,
+      "stdev_s": 0.74,
+      "min_s": 20.11,
+      "max_s": 22.04
+    },
+    "animation_on": {
+      "runs_s": [
+        34.9,
+        33.34,
+        35.16,
+        34.88,
+        33.1
+      ],
+      "mean_s": 34.27,
+      "stdev_s": 0.97,
+      "min_s": 33.1,
+      "max_s": 35.16
+    }
+  }
+}

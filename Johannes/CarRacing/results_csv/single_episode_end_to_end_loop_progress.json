@@ -1,0 +1,15 @@
+{
+  "stage": "completed",
+  "loops": 3,
+  "direct_seconds_raw": [
+    23.581,
+    20.54,
+    16.956
+  ],
+  "gui_seconds_raw": [
+    19.453,
+    21.868,
+    17.822
+  ],
+  "error": null
+}

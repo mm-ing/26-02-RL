@@ -1,0 +1,16 @@
+{
+  "scenario": "full_gui_gradient_step_single_episode_case_loop",
+  "num_envs": 4,
+  "loops": 3,
+  "elapsed_seconds_raw": [
+    46.2,
+    38.998,
+    0.318
+  ],
+  "runs": 3,
+  "elapsed_seconds_mean": 28.505,
+  "elapsed_seconds_median": 38.998,
+  "elapsed_seconds_min": 0.318,
+  "elapsed_seconds_max": 46.2,
+  "errors": []
+}

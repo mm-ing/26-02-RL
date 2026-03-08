@@ -1,0 +1,12 @@
+{
+  "scenario": "gui_no_animation_with_gradient_update",
+  "policy": "SAC",
+  "episodes": 1,
+  "max_steps": 1000,
+  "animation_on": false,
+  "device": "GPU",
+  "learning_starts": 0,
+  "train_freq": 1,
+  "gradient_steps": 1,
+  "elapsed_seconds": 70.144
+}

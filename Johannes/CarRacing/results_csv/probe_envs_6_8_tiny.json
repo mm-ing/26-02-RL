@@ -1,0 +1,19 @@
+{
+  "scenario": "probe_envs_6_8_tiny",
+  "runs": [
+    {
+      "num_envs": 6,
+      "elapsed_seconds": 10.378,
+      "steps_per_second": 0.0,
+      "updates_per_second": 5.560304891791083,
+      "cancelled": false
+    },
+    {
+      "num_envs": 8,
+      "elapsed_seconds": 5.823,
+      "steps_per_second": 0.0,
+      "updates_per_second": 4.808910164195244,
+      "cancelled": false
+    }
+  ]
+}

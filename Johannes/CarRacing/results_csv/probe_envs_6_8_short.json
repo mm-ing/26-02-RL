@@ -1,0 +1,26 @@
+{
+  "scenario": "probe_envs_6_8_short",
+  "policy": "SAC",
+  "animation_on": false,
+  "device": "GPU",
+  "runs": [
+    {
+      "num_envs": 6,
+      "episodes": 1,
+      "max_steps": 500,
+      "elapsed_seconds": 17.086,
+      "steps_per_second": 0.0,
+      "updates_per_second": 6.405839245817644,
+      "cancelled": false
+    },
+    {
+      "num_envs": 8,
+      "episodes": 1,
+      "max_steps": 500,
+      "elapsed_seconds": 12.781,
+      "steps_per_second": 0.0,
+      "updates_per_second": 5.162185249377338,
+      "cancelled": false
+    }
+  ]
+}
