@@ -20,7 +20,6 @@
     - `SAC` (default)
     - `TD3`
     - `DDPG`
-- use CNN architecture
 
 ## GUI
 - in the environment group: 
