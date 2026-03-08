@@ -1,0 +1,26 @@
+# RL-Workbench – Pusher-v5
+
+## Voraussetzungen
+- !!! WICHTIG !!!: Immer [workbench.md](../workbench.md), [workbench_ui.md](../workbench_ui.md) und [workbench_logic.md](../workbench_logic.md) berücksichtigen.
+- Bitte Inhalte nicht einfach von vorherigen Versionen kopieren, es gibt Abweichungen!!
+- Alle Regeln aus beiden Dateien gelten verbindlich.
+
+## Spezielle Anforderungen
+
+### Projekt
+- `[projektname]` = `pusher`
+- Ausgabeordner: `Manfred/Pusher/`
+- Dateien: `pusher_app.py`, `pusher_logic.py`, `pusher_ui.py`
+
+### Environment
+- `gymnasium.make("Pusher-v5", render_mode="rgb_array")`
+- Konfigurierbare Parameter (editierbar in Environment Configuration):
+  - `reward_control_weight` (default `0.1`)
+  - `reward_near_weight` (default `0.5`)
+  - `reward_dist_weight` (default `1`)
+
+### Algorithmen
+- **SAC**, **TD3**, **DDPG**,  via **Stable-Baselines3**
+- Alle Hyperparameter einstellbar (inkl. Netzwerk-Architektur, Replay-Buffer etc.)
+
+---
