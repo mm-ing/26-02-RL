@@ -1,0 +1,30 @@
+{
+  "scenario": "single_combo_gui_anim_grad_warmup_plus_measured",
+  "combo": {
+    "gui_on": false,
+    "animation_on": true,
+    "with_gradient_update": true
+  },
+  "policy": "SAC",
+  "episodes": 1,
+  "max_steps": 1000,
+  "device": "GPU",
+  "num_envs": 4,
+  "learning_starts": 1,
+  "train_freq": 1,
+  "gradient_steps": 1,
+  "warmup_runs_discarded": 1,
+  "warmup_timings_seconds": [
+    29.834
+  ],
+  "measured_runs": 5,
+  "measured_timings_seconds": [
+    26.397,
+    26.649,
+    26.966,
+    26.577,
+    26.569
+  ],
+  "measured_mean_seconds": 26.632,
+  "measured_std_seconds": 0.209
+}
