@@ -1,695 +1,468 @@
 from __future__ import annotations
 
 import csv
-import json
-import math
 import os
 import threading
 import time
-import uuid
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime
-from itertools import product
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+import gymnasium as gym
 import numpy as np
 import torch
+from stable_baselines3 import DDPG, PPO, SAC, TD3
+from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.type_aliases import Schedule
 
-try:
-    import gymnasium as gym
-except Exception as exc:  # pragma: no cover - imported by runtime users
-    raise RuntimeError("gymnasium is required for Pusher logic") from exc
-
-try:
-    from stable_baselines3 import DDPG, PPO, SAC, TD3
-    from stable_baselines3.common.callbacks import BaseCallback
-except Exception:
-    DDPG = PPO = SAC = TD3 = None  # type: ignore[assignment]
-
-    class BaseCallback:  # type: ignore[no-redef]
-        def __init__(self, verbose: int = 0) -> None:
-            self.verbose = verbose
-
-        def _on_step(self) -> bool:
-            return True
-
-
+PROJECT_NAME = "Pusher"
 ENV_ID = "Pusher-v5"
 
-POLICIES_CONTINUOUS = ["PPO", "SAC", "TD3", "DDPG"]
-DEFAULT_POLICY = "SAC"
-
-SHARED_SPECIFIC_KEYS = [
-    "gamma",
-    "learning_rate",
-    "batch_size",
-    "hidden_layer",
-    "activation",
-    "lr_strategy",
-    "min_lr",
-    "lr_decay",
-]
-
-POLICY_DEFAULTS: Dict[str, Dict[str, Any]] = {
-    "PPO": {
-        "gamma": 0.99,
-        "learning_rate": 3e-4,
-        "batch_size": 256,
-        "hidden_layer": "256,256",
-        "activation": "relu",
-        "lr_strategy": "linear",
-        "min_lr": 1e-5,
-        "lr_decay": 0.995,
-        "n_steps": 1024,
-        "n_epochs": 10,
-        "ent_coef": 0.0,
-    },
-    "SAC": {
-        "gamma": 0.99,
-        "learning_rate": 3e-4,
-        "batch_size": 256,
-        "hidden_layer": "256,256",
-        "activation": "relu",
-        "lr_strategy": "constant",
-        "min_lr": 1e-5,
-        "lr_decay": 0.995,
-        "buffer_size": 300000,
-        "learning_starts": 10000,
-        "tau": 0.005,
-        "train_freq": 1,
-        "gradient_steps": 1,
-    },
-    "TD3": {
-        "gamma": 0.99,
-        "learning_rate": 3e-4,
-        "batch_size": 256,
-        "hidden_layer": "256,256",
-        "activation": "relu",
-        "lr_strategy": "constant",
-        "min_lr": 1e-5,
-        "lr_decay": 0.995,
-        "buffer_size": 300000,
-        "learning_starts": 10000,
-        "tau": 0.005,
-        "train_freq": 1,
-        "gradient_steps": 1,
-        "policy_delay": 2,
-    },
-    "DDPG": {
-        "gamma": 0.99,
-        "learning_rate": 3e-4,
-        "batch_size": 256,
-        "hidden_layer": "256,256",
-        "activation": "relu",
-        "lr_strategy": "constant",
-        "min_lr": 1e-5,
-        "lr_decay": 0.995,
-        "buffer_size": 200000,
-        "learning_starts": 10000,
-        "tau": 0.005,
-        "train_freq": 1,
-        "gradient_steps": 1,
-    },
-}
-
-POLICY_SPECIFIC_KEYS: Dict[str, List[str]] = {
-    policy_name: [
-        key for key in defaults.keys() if key not in SHARED_SPECIFIC_KEYS
-    ]
-    for policy_name, defaults in POLICY_DEFAULTS.items()
-}
-
-ALGO_MAP = {
-    "PPO": PPO,
-    "SAC": SAC,
-    "TD3": TD3,
-    "DDPG": DDPG,
-}
-
-ACTIVATION_MAP = {
-    "relu": torch.nn.ReLU,
-    "tanh": torch.nn.Tanh,
-    "elu": torch.nn.ELU,
-    "gelu": torch.nn.GELU,
-}
+EventSink = Callable[[Dict[str, Any]], None]
 
 
-@dataclass
+@dataclass(frozen=True)
+class EnvironmentConfig:
+    reward_near_weight: float = 0.5
+    reward_dist_weight: float = 1.0
+    reward_control_weight: float = 0.1
+    render_mode: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class NetworkConfig:
+    hidden_layer: str = "256"
+    activation: str = "relu"
+
+
+@dataclass(frozen=True)
+class LearningRateConfig:
+    lr_strategy: str = "constant"
+    learning_rate: float = 3e-4
+    min_lr: float = 1e-5
+    lr_decay: float = 0.999
+
+
+@dataclass(frozen=True)
 class TrainerConfig:
-    policy: str = DEFAULT_POLICY
+    policy_name: str = "SAC"
     episodes: int = 3000
     max_steps: int = 200
-    seed: Optional[int] = 42
-    device: str = "CPU"
-    update_rate: int = 10
+    update_rate: int = 5
     frame_stride: int = 2
-    enable_animation: bool = True
-    env_params: Dict[str, Any] = field(
-        default_factory=lambda: {
-            "reward_near_weight": 0.5,
-            "reward_dist_weight": 1.0,
-            "reward_control_weight": 0.1,
-        }
-    )
-    shared_params: Dict[str, Any] = field(default_factory=dict)
-    policy_params: Dict[str, Any] = field(default_factory=dict)
+    deterministic_eval_every: int = 10
+    deterministic_eval_episodes: int = 1
+    seed: Optional[int] = 42
     collect_transitions: bool = False
-    export_transitions_csv: bool = False
-    results_dir: str = "results_csv"
-    plots_dir: str = "plots"
-    run_label: str = ""
-    cpu_threads: Optional[int] = None
+    export_csv: bool = False
+    device: str = "CPU"
+    session_id: str = "default-session"
+    run_id: str = "default-run"
+    env: EnvironmentConfig = field(default_factory=EnvironmentConfig)
+    network: NetworkConfig = field(default_factory=NetworkConfig)
+    lr: LearningRateConfig = field(default_factory=LearningRateConfig)
+    policy_params: Dict[str, Any] = field(default_factory=dict)
 
 
-class EpisodeFrameCallback(BaseCallback):
-    def __init__(self, capture_enabled: bool, frame_stride: int, max_steps: int) -> None:
+class PusherEnvWrapper:
+    def __init__(self, config: EnvironmentConfig) -> None:
+        self._config = config
+
+    @property
+    def config(self) -> EnvironmentConfig:
+        return self._config
+
+    def rebuild(self, config: EnvironmentConfig) -> None:
+        self._config = config
+
+    def make_env(self) -> gym.Env:
+        kwargs: Dict[str, Any] = {
+            "reward_near_weight": self._config.reward_near_weight,
+            "reward_dist_weight": self._config.reward_dist_weight,
+            "reward_control_weight": self._config.reward_control_weight,
+        }
+        if self._config.render_mode:
+            kwargs["render_mode"] = self._config.render_mode
+        return gym.make(ENV_ID, **kwargs)
+
+
+class _TrainingProgressCallback(BaseCallback):
+    def __init__(self, pause_event: threading.Event, cancel_event: threading.Event, step_budget: int) -> None:
         super().__init__()
-        self.capture_enabled = capture_enabled
-        self.frame_stride = max(1, int(frame_stride))
-        self.max_steps = max(1, int(max_steps))
-        self._step = 0
-        self.frames: List[np.ndarray] = []
+        self.pause_event = pause_event
+        self.cancel_event = cancel_event
+        self.step_budget = max(1, int(step_budget))
+        self.steps_seen = 0
 
     def _on_step(self) -> bool:
-        self._step += 1
-        if self.capture_enabled and (self._step == 1 or self._step % self.frame_stride == 0):
-            try:
-                frame = self.training_env.render()
-                if frame is not None:
-                    self.frames.append(np.array(frame))
-            except Exception:
-                pass
-        return self._step < self.max_steps
+        if self.cancel_event.is_set():
+            return False
+        self.pause_event.wait()
+        self.steps_seen += 1
+        return self.steps_seen <= self.step_budget
 
 
-def parse_hidden_layers(raw_value: Union[str, int, List[int], Tuple[int, ...]], fallback: Tuple[int, ...] = (256, 256)) -> Tuple[int, ...]:
-    if isinstance(raw_value, int):
-        return (raw_value, raw_value)
-    if isinstance(raw_value, (list, tuple)) and raw_value:
-        parsed = [int(v) for v in raw_value if int(v) > 0]
-        return tuple(parsed) if parsed else fallback
-    if not isinstance(raw_value, str):
-        return fallback
+class SB3PolicyFactory:
+    POLICY_MAP = {
+        "PPO": PPO,
+        "SAC": SAC,
+        "TD3": TD3,
+        "DDPG": DDPG,
+    }
 
-    text = raw_value.strip()
-    if not text:
-        return fallback
-    if "," not in text:
+    ACTIVATIONS = {
+        "relu": torch.nn.ReLU,
+        "tanh": torch.nn.Tanh,
+        "elu": torch.nn.ELU,
+        "leaky_relu": torch.nn.LeakyReLU,
+    }
+
+    @staticmethod
+    def policy_defaults(policy_name: str) -> Dict[str, Any]:
+        defaults = {
+            "PPO": {
+                "learning_rate": 3e-4,
+                "gamma": 0.99,
+                "batch_size": 64,
+                "n_steps": 1024,
+                "ent_coef": 0.0,
+            },
+            "SAC": {
+                "learning_rate": 3e-4,
+                "gamma": 0.99,
+                "batch_size": 256,
+                "buffer_size": 200_000,
+                "learning_starts": 5_000,
+                "tau": 0.005,
+            },
+            "TD3": {
+                "learning_rate": 3e-4,
+                "gamma": 0.99,
+                "batch_size": 256,
+                "buffer_size": 200_000,
+                "learning_starts": 5_000,
+                "tau": 0.005,
+                "policy_delay": 2,
+            },
+            "DDPG": {
+                "learning_rate": 1e-3,
+                "gamma": 0.99,
+                "batch_size": 256,
+                "buffer_size": 200_000,
+                "learning_starts": 5_000,
+                "tau": 0.005,
+            },
+        }
+        return dict(defaults.get(policy_name, defaults["SAC"]))
+
+    @classmethod
+    def _parse_net_arch(cls, hidden_layer: str) -> List[int]:
         try:
-            width = int(text)
-            return (width, width) if width > 0 else fallback
+            chunks = [int(part.strip()) for part in str(hidden_layer).split(",") if part.strip()]
         except ValueError:
-            return fallback
+            chunks = []
 
-    values: List[int] = []
-    for part in text.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        try:
-            width = int(part)
-        except ValueError:
-            return fallback
-        if width <= 0:
-            return fallback
-        values.append(width)
-    return tuple(values) if values else fallback
+        if not chunks:
+            return [256, 256]
+        if len(chunks) == 1:
+            return [chunks[0], chunks[0]]
+        return chunks
 
+    @classmethod
+    def _build_schedule(cls, cfg: LearningRateConfig) -> float | Schedule:
+        strategy = cfg.lr_strategy.lower().strip()
+        base_lr = float(cfg.learning_rate)
+        min_lr = float(cfg.min_lr)
+        decay = float(cfg.lr_decay)
 
-def resolve_device(requested: str) -> str:
-    requested_upper = str(requested).strip().upper()
-    if requested_upper == "GPU" and torch.cuda.is_available():
-        return "cuda"
-    return "cpu"
+        if strategy == "constant":
+            return base_lr
 
+        if strategy == "linear":
+            def linear_schedule(progress_remaining: float) -> float:
+                return max(min_lr, min_lr + (base_lr - min_lr) * progress_remaining)
+            return linear_schedule
 
-def build_learning_rate(
-    base_lr: float,
-    strategy: str,
-    min_lr: float,
-    lr_decay: float,
-) -> Union[float, Callable[[float], float]]:
-    base_lr = float(base_lr)
-    min_lr = max(0.0, float(min_lr))
-    lr_decay = float(lr_decay)
-    strategy = str(strategy).strip().lower()
-
-    if strategy == "constant":
-        return max(base_lr, min_lr)
-
-    if strategy == "linear":
-        def linear_schedule(progress_remaining: float) -> float:
-            value = progress_remaining * base_lr
-            return max(value, min_lr)
-
-        return linear_schedule
-
-    if strategy == "exponential":
         def exp_schedule(progress_remaining: float) -> float:
-            progress = max(0.0, min(1.0, 1.0 - progress_remaining))
-            decay_multiplier = math.pow(max(1e-6, lr_decay), progress * 1000.0)
-            value = base_lr * decay_multiplier
-            return max(value, min_lr)
+            progress_done = 1.0 - progress_remaining
+            value = base_lr * (decay ** (progress_done * 1000.0))
+            return max(min_lr, value)
 
         return exp_schedule
 
-    return max(base_lr, min_lr)
+    @classmethod
+    def create_model(
+        cls,
+        policy_name: str,
+        env: gym.Env,
+        network_cfg: NetworkConfig,
+        lr_cfg: LearningRateConfig,
+        policy_params: Optional[Dict[str, Any]] = None,
+        device: str = "cpu",
+        seed: Optional[int] = None,
+    ) -> Any:
+        if policy_name not in cls.POLICY_MAP:
+            raise ValueError(f"Unsupported policy '{policy_name}'.")
 
+        algo_cls = cls.POLICY_MAP[policy_name]
+        defaults = cls.policy_defaults(policy_name)
+        merged: Dict[str, Any] = {**defaults, **(policy_params or {})}
 
-def build_compare_configs(
-    base_config: TrainerConfig,
-    compare_grid: Dict[str, List[Any]],
-) -> List[TrainerConfig]:
-    normalized_grid = {k: v for k, v in compare_grid.items() if v}
-    if not normalized_grid:
-        return [base_config]
+        net_arch = cls._parse_net_arch(network_cfg.hidden_layer)
+        activation_fn = cls.ACTIVATIONS.get(network_cfg.activation.lower().strip(), torch.nn.ReLU)
 
-    keys = list(normalized_grid.keys())
-    values_product = list(product(*[normalized_grid[key] for key in keys]))
-    policy_in_grid = "policy" in normalized_grid
-
-    configs: List[TrainerConfig] = []
-    for combo_values in values_product:
-        combo = dict(zip(keys, combo_values))
-        policy_name = str(combo.get("policy", base_config.policy))
-        if policy_name not in POLICIES_CONTINUOUS:
-            continue
-
-        config = replace(base_config)
-        config.policy = policy_name
-
-        if policy_in_grid:
-            # Policy compare baseline starts from each policy's defaults.
-            config.shared_params = {
-                key: POLICY_DEFAULTS[policy_name].get(key, base_config.shared_params.get(key))
-                for key in SHARED_SPECIFIC_KEYS
-            }
-            config.policy_params = {
-                key: POLICY_DEFAULTS[policy_name].get(key)
-                for key in POLICY_SPECIFIC_KEYS.get(policy_name, [])
-            }
-        else:
-            config.shared_params = dict(base_config.shared_params)
-            config.policy_params = dict(base_config.policy_params)
-
-        for key, value in combo.items():
-            if key == "policy":
-                continue
-            if key in SHARED_SPECIFIC_KEYS:
-                config.shared_params[key] = value
-                continue
-            if key in POLICY_SPECIFIC_KEYS.get(policy_name, []):
-                config.policy_params[key] = value
-
-        label_parts = [f"{k}={combo[k]}" for k in keys]
-        config.run_label = " | ".join(label_parts)
-        configs.append(config)
-
-    return configs or [base_config]
-
-
-class PusherEnvironment:
-    def __init__(self, env_params: Optional[Dict[str, Any]] = None, render_mode: Optional[str] = None) -> None:
-        self.env_params = dict(env_params or {})
-        self.render_mode = render_mode
-
-    def make(self):
-        return gym.make(ENV_ID, render_mode=self.render_mode, **self.env_params)
-
-
-class SB3PolicyAgent:
-    @staticmethod
-    def build_model(policy_name: str, env, shared_params: Dict[str, Any], policy_params: Dict[str, Any], device: str, seed: Optional[int]):
-        algo_cls = ALGO_MAP.get(policy_name)
-        if algo_cls is None:
-            raise ImportError(
-                f"Policy '{policy_name}' is unavailable. Install stable-baselines3/sb3-contrib first."
-            )
-
-        all_params = dict(POLICY_DEFAULTS[policy_name])
-        all_params.update(shared_params)
-        all_params.update(policy_params)
-
-        hidden = parse_hidden_layers(all_params.get("hidden_layer", "256,256"))
-        activation_name = str(all_params.get("activation", "relu")).strip().lower()
-        activation_fn = ACTIVATION_MAP.get(activation_name, torch.nn.ReLU)
-        lr_schedule = build_learning_rate(
-            base_lr=float(all_params.get("learning_rate", 3e-4)),
-            strategy=str(all_params.get("lr_strategy", "constant")),
-            min_lr=float(all_params.get("min_lr", 1e-5)),
-            lr_decay=float(all_params.get("lr_decay", 0.995)),
-        )
-
-        kwargs: Dict[str, Any] = {
-            "learning_rate": lr_schedule,
-            "gamma": float(all_params.get("gamma", 0.99)),
-            "batch_size": int(all_params.get("batch_size", 256)),
-            "policy_kwargs": {
-                "net_arch": list(hidden),
-                "activation_fn": activation_fn,
-            },
-            "device": device,
-            "seed": seed,
-            "verbose": 0,
+        policy_kwargs = {
+            "activation_fn": activation_fn,
+            "net_arch": net_arch,
         }
 
-        if policy_name == "PPO":
-            kwargs.update(
-                {
-                    "n_steps": int(all_params.get("n_steps", 1024)),
-                    "n_epochs": int(all_params.get("n_epochs", 10)),
-                    "ent_coef": float(all_params.get("ent_coef", 0.0)),
-                }
-            )
-            kwargs["n_steps"] = max(kwargs["n_steps"], kwargs["batch_size"])  # keep PPO config valid
-        else:
-            kwargs.update(
-                {
-                    "buffer_size": int(all_params.get("buffer_size", 300000)),
-                    "learning_starts": int(all_params.get("learning_starts", 10000)),
-                    "tau": float(all_params.get("tau", 0.005)),
-                    "train_freq": int(all_params.get("train_freq", 1)),
-                    "gradient_steps": int(all_params.get("gradient_steps", 1)),
-                }
-            )
-            if policy_name == "TD3":
-                kwargs["policy_delay"] = int(all_params.get("policy_delay", 2))
+        merged["policy_kwargs"] = policy_kwargs
+        merged["learning_rate"] = cls._build_schedule(lr_cfg)
 
-        return algo_cls("MlpPolicy", env, **kwargs)
+        if policy_name == "PPO":
+            n_steps = int(merged.get("n_steps", 1024))
+            batch_size = int(merged.get("batch_size", 64))
+            if n_steps < batch_size:
+                n_steps = batch_size
+            if n_steps % batch_size != 0:
+                n_steps = ((n_steps // batch_size) + 1) * batch_size
+            merged["n_steps"] = n_steps
+            merged["batch_size"] = batch_size
+
+        model = algo_cls(
+            "MlpPolicy",
+            env,
+            seed=seed,
+            device=device,
+            verbose=0,
+            **merged,
+        )
+        return model
 
 
 class PusherTrainer:
-    def __init__(
-        self,
-        event_sink: Optional[Callable[[Dict[str, Any]], None]] = None,
-        env_factory: Optional[Callable[[Optional[str], Dict[str, Any]], Any]] = None,
-    ) -> None:
+    def __init__(self, env_wrapper: PusherEnvWrapper, event_sink: Optional[EventSink] = None) -> None:
+        self.env_wrapper = env_wrapper
         self.event_sink = event_sink
-        self.env_factory = env_factory
         self.pause_event = threading.Event()
         self.pause_event.set()
         self.cancel_event = threading.Event()
-        self.eval_points: List[Tuple[int, float]] = []
-        self._current_config: Optional[TrainerConfig] = None
-        self._best_reward = -float("inf")
+        self._latest_render_state: Optional[np.ndarray] = None
+        self._transitions: List[Dict[str, Any]] = []
+
+    @staticmethod
+    def _resolved_device(requested: str) -> str:
+        if str(requested).upper() == "GPU" and torch.cuda.is_available():
+            return "cuda"
+        return "cpu"
+
+    def pause(self) -> None:
+        self.pause_event.clear()
+
+    def resume(self) -> None:
+        self.pause_event.set()
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
+        self.pause_event.set()
+
+    def update_environment(self, config: EnvironmentConfig) -> None:
+        self.env_wrapper.rebuild(config)
 
     def _emit(self, payload: Dict[str, Any]) -> None:
         if self.event_sink is not None:
             self.event_sink(payload)
 
-    def request_pause(self) -> None:
-        self.pause_event.clear()
-
-    def request_resume(self) -> None:
-        self.pause_event.set()
-
-    def request_cancel(self) -> None:
-        self.cancel_event.set()
-        self.pause_event.set()
-
-    def update_environment(self, new_params: Dict[str, Any]) -> None:
-        if self._current_config is None:
+    def _capture_frame(self, env: gym.Env, episode_frames: List[np.ndarray], stride: int, step_idx: int) -> None:
+        if step_idx != 0 and step_idx % max(1, stride) != 0:
             return
-        self._current_config.env_params.update(new_params)
-
-    def _make_env(self, render_mode: Optional[str], env_params: Dict[str, Any]):
-        if self.env_factory:
-            return self.env_factory(render_mode, env_params)
-        return PusherEnvironment(env_params=env_params, render_mode=render_mode).make()
-
-    def _extract_current_lr(self, model) -> float:
-        lr_schedule = getattr(model, "lr_schedule", None)
-        if callable(lr_schedule):
-            progress_remaining = float(getattr(model, "_current_progress_remaining", 1.0))
-            return float(lr_schedule(progress_remaining))
-        if isinstance(lr_schedule, (int, float)):
-            return float(lr_schedule)
-        return 0.0
+        frame = env.render()
+        if isinstance(frame, np.ndarray):
+            self._latest_render_state = frame
+            episode_frames.append(frame)
 
     def run_episode(
         self,
-        env,
-        model,
-        deterministic: bool = False,
-        max_steps: int = 200,
-        collect_transitions: bool = False,
-        capture_frames: bool = False,
-        frame_stride: int = 2,
-    ) -> Dict[str, Any]:
+        model: Any,
+        env: gym.Env,
+        max_steps: int,
+        deterministic: bool,
+        frame_stride: int,
+        collect_transitions: bool,
+    ) -> Tuple[float, int, List[np.ndarray]]:
         obs, _ = env.reset()
         total_reward = 0.0
-        transitions: List[Dict[str, Any]] = []
-        frames: List[np.ndarray] = []
+        episode_frames: List[np.ndarray] = []
 
-        for step in range(1, max_steps + 1):
+        for step_idx in range(max_steps):
+            self.pause_event.wait()
+            if self.cancel_event.is_set():
+                break
+
             action, _ = model.predict(obs, deterministic=deterministic)
             next_obs, reward, terminated, truncated, _ = env.step(action)
+            done = terminated or truncated
+
             total_reward += float(reward)
+            self._capture_frame(env, episode_frames, frame_stride, step_idx)
 
             if collect_transitions:
-                transitions.append(
+                self._transitions.append(
                     {
-                        "step": step,
+                        "step": step_idx,
                         "reward": float(reward),
-                        "terminated": bool(terminated),
-                        "truncated": bool(truncated),
-                        "action": np.asarray(action).tolist(),
-                        "observation": np.asarray(obs).tolist(),
-                        "next_observation": np.asarray(next_obs).tolist(),
+                        "done": bool(done),
                     }
                 )
 
-            if capture_frames and (step == 1 or step % max(1, frame_stride) == 0):
-                try:
-                    frame = env.render()
-                    if frame is not None:
-                        frames.append(np.asarray(frame))
-                except Exception:
-                    pass
-
             obs = next_obs
-            if terminated or truncated:
-                return {
-                    "reward": total_reward,
-                    "steps": step,
-                    "transitions": transitions,
-                    "frames": frames,
-                }
+            if done:
+                return total_reward, step_idx + 1, episode_frames
 
-        return {
-            "reward": total_reward,
-            "steps": max_steps,
-            "transitions": transitions,
-            "frames": frames,
-        }
+        return total_reward, max_steps, episode_frames
 
-    def evaluate_policy(self, model, episodes: int = 1, max_steps: int = 200) -> float:
-        if self._current_config is None:
-            return 0.0
-
-        env = self._make_env(render_mode=None, env_params=self._current_config.env_params)
+    def evaluate_policy(self, model: Any, episodes: int, max_steps: int) -> float:
+        eval_env = self.env_wrapper.make_env()
         try:
             rewards: List[float] = []
             for _ in range(max(1, episodes)):
-                episode = self.run_episode(
-                    env=env,
+                reward, _, _ = self.run_episode(
                     model=model,
-                    deterministic=True,
+                    env=eval_env,
                     max_steps=max_steps,
+                    deterministic=True,
+                    frame_stride=1,
                     collect_transitions=False,
-                    capture_frames=False,
                 )
-                rewards.append(float(episode["reward"]))
+                rewards.append(reward)
             return float(np.mean(rewards)) if rewards else 0.0
         finally:
-            env.close()
+            eval_env.close()
 
-    def _export_transitions_csv(self, transitions: List[Dict[str, Any]], run_id: str, output_dir: str) -> Optional[str]:
-        if not transitions:
+    def _export_transitions_csv(self, run_id: str) -> Optional[str]:
+        if not self._transitions:
             return None
-        os.makedirs(output_dir, exist_ok=True)
-        file_name = f"{run_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        csv_path = os.path.join(output_dir, file_name)
 
-        columns = [
-            "run_id",
-            "episode",
-            "step",
-            "reward",
-            "terminated",
-            "truncated",
-            "action",
-            "observation",
-            "next_observation",
-        ]
-        with open(csv_path, "w", newline="", encoding="utf-8") as csv_file:
-            writer = csv.DictWriter(csv_file, fieldnames=columns)
+        os.makedirs("results_csv", exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{PROJECT_NAME}_{run_id}_{timestamp}_transitions.csv"
+        output_path = os.path.join("results_csv", filename)
+
+        with open(output_path, "w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=["step", "reward", "done"])
             writer.writeheader()
-            for row in transitions:
-                writer.writerow(
-                    {
-                        "run_id": run_id,
-                        "episode": row["episode"],
-                        "step": row["step"],
-                        "reward": row["reward"],
-                        "terminated": row["terminated"],
-                        "truncated": row["truncated"],
-                        "action": json.dumps(row["action"]),
-                        "observation": json.dumps(row["observation"]),
-                        "next_observation": json.dumps(row["next_observation"]),
-                    }
-                )
-        return csv_path
+            writer.writerows(self._transitions)
 
-    def _snapshot_config(self, config: TrainerConfig) -> Dict[str, Any]:
-        return {
-            "policy": config.policy,
-            "device": config.device,
-            "episodes": int(config.episodes),
-            "max_steps": int(config.max_steps),
-            "env_params": dict(config.env_params),
-            "shared_params": dict(config.shared_params),
-            "policy_params": dict(config.policy_params),
-            "run_label": config.run_label,
-        }
+        return output_path
 
     def train(self, config: TrainerConfig) -> Dict[str, Any]:
-        self._current_config = config
         self.cancel_event.clear()
         self.pause_event.set()
-        self.eval_points = []
-        self._best_reward = -float("inf")
+        self._transitions.clear()
 
-        run_id = f"{config.policy.lower()}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
-        transitions_for_export: List[Dict[str, Any]] = []
-        config_snapshot = self._snapshot_config(config)
+        train_env = self.env_wrapper.make_env()
+        model = SB3PolicyFactory.create_model(
+            policy_name=config.policy_name,
+            env=train_env,
+            network_cfg=config.network,
+            lr_cfg=config.lr,
+            policy_params=config.policy_params,
+            device=self._resolved_device(config.device),
+            seed=config.seed,
+        )
 
-        render_mode = "rgb_array" if config.enable_animation else None
-        env = self._make_env(render_mode=render_mode, env_params=config.env_params)
+        rewards: List[float] = []
+        moving_average: List[float] = []
+        eval_points: List[Tuple[int, float]] = []
+        best_reward = float("-inf")
 
         try:
-            if resolve_device(config.device) == "cpu" and config.cpu_threads is not None:
-                torch.set_num_threads(max(1, int(config.cpu_threads)))
-
-            model = SB3PolicyAgent.build_model(
-                policy_name=config.policy,
-                env=env,
-                shared_params=config.shared_params,
-                policy_params=config.policy_params,
-                device=resolve_device(config.device),
-                seed=config.seed,
-            )
-
-            rewards: List[float] = []
-            episodes_completed = 0
-
-            for episode_idx in range(1, int(config.episodes) + 1):
+            for episode in range(1, config.episodes + 1):
+                self.pause_event.wait()
                 if self.cancel_event.is_set():
                     break
-                self.pause_event.wait()
 
-                capture_frames = bool(
-                    config.enable_animation
-                    and (episode_idx == config.episodes or episode_idx % max(1, config.update_rate) == 0)
-                )
-                callback = EpisodeFrameCallback(
-                    capture_enabled=capture_frames,
-                    frame_stride=config.frame_stride,
-                    max_steps=config.max_steps,
-                )
-                model.learn(
-                    total_timesteps=int(config.max_steps),
-                    reset_num_timesteps=False,
-                    callback=callback,
-                    progress_bar=False,
-                )
-
-                episode_data = self.run_episode(
-                    env=env,
+                # Roll out one episode for metrics and optional animation frame capture.
+                reward, steps, frames = self.run_episode(
                     model=model,
+                    env=train_env,
+                    max_steps=config.max_steps,
                     deterministic=False,
-                    max_steps=int(config.max_steps),
-                    collect_transitions=bool(config.collect_transitions or config.export_transitions_csv),
-                    capture_frames=False,
-                    frame_stride=config.frame_stride,
+                    frame_stride=max(1, config.frame_stride),
+                    collect_transitions=config.collect_transitions,
                 )
 
-                self._emit(
-                    {
-                        "type": "step",
-                        "run_id": run_id,
-                        "episode": episode_idx,
-                        "step": int(episode_data["steps"]),
-                        "max_steps": int(config.max_steps),
-                    }
+                callback = _TrainingProgressCallback(
+                    pause_event=self.pause_event,
+                    cancel_event=self.cancel_event,
+                    step_budget=max(1, steps),
                 )
+                model.learn(total_timesteps=max(1, steps), reset_num_timesteps=False, callback=callback)
 
-                episode_reward = float(episode_data["reward"])
-                rewards.append(episode_reward)
-                moving_average = float(np.mean(rewards[-25:]))
-                self._best_reward = max(self._best_reward, episode_reward)
+                rewards.append(reward)
+                window = rewards[-20:]
+                moving = float(np.mean(window)) if window else reward
+                moving_average.append(moving)
+                best_reward = max(best_reward, reward)
 
-                if config.collect_transitions or config.export_transitions_csv:
-                    for tr in episode_data["transitions"]:
-                        row = dict(tr)
-                        row["episode"] = episode_idx
-                        transitions_for_export.append(row)
+                if episode % max(1, config.deterministic_eval_every) == 0:
+                    eval_reward = self.evaluate_policy(
+                        model=model,
+                        episodes=config.deterministic_eval_episodes,
+                        max_steps=config.max_steps,
+                    )
+                    eval_points.append((episode, eval_reward))
 
-                if episode_idx % 10 == 0 or episode_idx == config.episodes:
-                    score = self.evaluate_policy(model, episodes=1, max_steps=int(config.max_steps))
-                    self.eval_points.append((episode_idx, score))
-
-                payload = {
+                should_emit_frames = episode % max(1, config.update_rate) == 0 or episode == config.episodes
+                payload: Dict[str, Any] = {
                     "type": "episode",
-                    "run_id": run_id,
-                    "run_label": config.run_label,
-                    "policy": config.policy,
-                    "episode": episode_idx,
-                    "episodes": int(config.episodes),
-                    "reward": episode_reward,
-                    "moving_average": moving_average,
-                    "eval_points": list(self.eval_points),
-                    "steps": int(episode_data["steps"]),
-                    "epsilon": 0.0,
-                    "lr": self._extract_current_lr(model),
-                    "best_reward": self._best_reward,
-                    "render_state": "updated" if callback.frames else "idle",
-                    "frames": callback.frames,
-                    "config_snapshot": config_snapshot,
+                    "session_id": config.session_id,
+                    "run_id": config.run_id,
+                    "episode": episode,
+                    "episodes": config.episodes,
+                    "reward": reward,
+                    "moving_average": moving,
+                    "eval_points": list(eval_points),
+                    "steps": steps,
+                    "epsilon": None,
+                    "lr": config.lr.learning_rate,
+                    "best_reward": best_reward,
+                    "render_state": self._latest_render_state,
                 }
-                if callback.frames:
-                    payload["frame"] = callback.frames[-1]
-
+                if should_emit_frames:
+                    payload["frames"] = frames
+                    payload["frame"] = frames[-1] if frames else None
                 self._emit(payload)
-                episodes_completed = episode_idx
 
-            csv_path = None
-            if config.export_transitions_csv:
-                csv_path = self._export_transitions_csv(transitions_for_export, run_id, config.results_dir)
+                if self.cancel_event.is_set():
+                    break
 
+            csv_path = self._export_transitions_csv(config.run_id) if config.export_csv else None
             final_payload = {
                 "type": "training_done",
-                "run_id": run_id,
-                "run_label": config.run_label,
-                "policy": config.policy,
-                "episodes_completed": episodes_completed,
-                "episodes": int(config.episodes),
-                "best_reward": self._best_reward,
-                "eval_points": list(self.eval_points),
-                "canceled": self.cancel_event.is_set(),
+                "session_id": config.session_id,
+                "run_id": config.run_id,
+                "stopped": self.cancel_event.is_set(),
+                "episodes_completed": len(rewards),
+                "best_reward": best_reward if rewards else None,
                 "csv_path": csv_path,
-                "config_snapshot": config_snapshot,
+                "finished_at": time.time(),
             }
             self._emit(final_payload)
             return final_payload
-
-        except Exception as exc:
-            error_payload = {
+        except Exception as exc:  # pragma: no cover - safety path for runtime GUI failures
+            payload = {
                 "type": "error",
-                "run_id": run_id,
+                "session_id": config.session_id,
+                "run_id": config.run_id,
                 "message": str(exc),
             }
-            self._emit(error_payload)
-            return error_payload
+            self._emit(payload)
+            raise
         finally:
-            env.close()
+            train_env.close()
+
+
+def build_default_trainer(event_sink: Optional[EventSink] = None) -> PusherTrainer:
+    wrapper = PusherEnvWrapper(EnvironmentConfig(render_mode="rgb_array"))
+    return PusherTrainer(wrapper, event_sink=event_sink)
