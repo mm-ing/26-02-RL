@@ -112,6 +112,7 @@ Notes:
 
 #### Live Plot Group Fields
 - `Moving average values` (default `20`)
+- `Evaluation rollout on` (default `False`)
 - do not add extra advanced controls for capture count; replay capture density is controlled by `Frame stride`
 
 ### Controls Row
@@ -148,11 +149,12 @@ Control Highlight Behavior:
 ### Live Plot Panel
 - no title
 - axis labels: `x = Episodes`, `y = Reward`
-- render per-episode reward with slight transparency (recommended `alpha ~ 0.60`)
+- render per-episode reward with slight transparency (recommended `alpha ~ 0.30`)
 - use the same run color for per-episode reward, `MA`, and `eval`
-- draw `MA` and `eval` with `2x` line width of reward and distinct styles
+- draw `MA` and `eval` with stronger emphasis than reward line width and distinct styles
 - use `alpha = 1.0` for both `MA` and `eval` lines
-  - recommended: `MA` dashed (`--`), `eval` dotted (`:`) with marker
+  - recommended: `MA` solid (`-`), `eval` dotted (`:`) with marker
+- when `Evaluation rollout on` is `False`, skip deterministic evaluation checkpoint computation and hide `evaluation rollout` line
 - legend outside right side
 - show full base label once per run, compact `moving average` / `evaluation rollout` entries
 - use plain legend labels `moving average` and `evaluation rollout` (no run-id suffix)
