@@ -1,50 +1,45 @@
 # Pusher
 
-SB3-based reinforcement learning GUI project for `Pusher-v5` with runtime environment controls and policy-specific training panels.
+SB3-based RL workbench for `Pusher-v5` with a Tkinter GUI and matplotlib live plotting.
 
 ## Included files
-- `Pusher_app.py`: application entrypoint
-- `Pusher_gui.py`: Tkinter GUI and worker orchestration
-- `Pusher_logic.py`: environment, policy/model builder, trainer, evaluation, event bridge
-- `Pusher_REQUIREMENTS_MATRIX.md`: implementation coverage and final contract recheck
+- `Pusher_app.py`
+- `Pusher_logic.py`
+- `Pusher_gui.py`
+- `Pusher_REQUIREMENTS_MATRIX.md`
 - `tests/test_Pusher_logic.py`
 - `tests/test_Pusher_gui.py`
-- `pytest.ini`, `run_tests.py`
+- `requirements.txt`
+- `pytest.ini`
 - output folders: `results_csv/`, `plots/`
 
-## Policies
-Continuous policies exposed in GUI:
-- `PPO`
-- `SAC` (default)
-- `TD3`
-- `DDPG`
-
-## Environment
-- ID: `Pusher-v5`
-- Render mode for GUI worker env: `rgb_array`
-- Runtime-configurable parameters:
+## Features
+- Backend: Stable-Baselines3 (`PPO`, `SAC`, `TD3`, `DDPG`)
+- Environment: `Pusher-v5` with runtime-adjustable parameters:
   - `reward_near_weight`
   - `reward_dist_weight`
   - `reward_control_weight`
+- Device selection: `CPU` and `GPU` (safe fallback to CPU when CUDA is unavailable)
+- Worker-threaded training with pause/resume/cancel controls
+- Event bridge contract for GUI updates:
+  - `episode`
+  - `training_done`
+  - `error`
+- Deterministic evaluation checkpoints every 10th episode
+- Optional sampled transition CSV export to `results_csv/`
+- Plot snapshot export to `plots/`
+- Non-blocking animation playback with latest-buffer-wins behavior
 
 ## Run
 ```bash
 python Pusher_app.py
 ```
 
-## Compare Mode
-- Enable `Compare mode` in the `Run` panel.
-- Use `Compare grid` to define Cartesian runs with `;`-separated keys and comma-separated values.
-- Example:
-  - `policy=PPO,SAC,TD3;learning_rate=0.0003,0.0001;batch_size=128,256`
-- Compare workers are bounded to `4` concurrent runs.
-- In compare mode, animation is enabled for one selected render run and disabled for the other workers.
-
-## Plot PNG Export
-- On each completed run (`training_done` event), the current training plot is exported to `plots/`.
-- Filenames include policy and key parameters plus timestamp.
-
-## Tests
+## Test
 ```bash
 python -m pytest -q --rootdir . --confcutdir . tests
 ```
+
+## Notes
+- GUI training environment uses `render_mode="rgb_array"`.
+- The logic layer is UI-independent and can be used in headless scripts/tests.

@@ -1,8 +1,7 @@
 stable-baselines3
-gymnasium[mujoco]
 sb3-contrib
 torch
 matplotlib
 pillow
-numpy
 pytest
+gymnasium[mujoco]

@@ -11,10 +11,11 @@ Implement one main GUI class with:
 
 Use this threading bridge:
 - queue/event bridge between workers and GUI (`after()` polling)
-- publish structured events (`step`, `episode`, `training_done`, `error`)
+- publish structured events (`step`, `episode`, `episode_aux`, `training_done`, `error`)
 - tag worker-originated events with `session_id` in the GUI-side worker bridge and ignore stale session events in the pump
 - pause/resume/cancel actions must control all active worker trainers for the current session (single-run and compare)
 - keep the active worker registry thread-safe (lock reads/writes) and pre-register workers before launching jobs so pause works immediately
+- emit `episode` as a fast metric event first; emit heavy payloads (`frames`, refreshed `eval_points`) via `episode_aux` so live plot progress is not blocked by replay/eval work
 
 ---
 
@@ -111,6 +112,7 @@ Notes:
 
 #### Live Plot Group Fields
 - `Moving average values` (default `20`)
+- `Evaluation rollout on` (default `False`)
 - do not add extra advanced controls for capture count; replay capture density is controlled by `Frame stride`
 
 ### Controls Row
@@ -139,14 +141,20 @@ Control Highlight Behavior:
 - status line format:
   - `Epsilon: <...> | LR: <...> | Best reward: <...> | Render: <off|on|skipped|idle>`
 
+### Live Update Strictness
+- provide a strict visual update mode for debugging/analysis where event pump batch size is `1` and pump interval is around `16 ms`
+- in strict mode, force immediate plot repaint for primary per-episode updates (`draw`) instead of relying only on idle coalescing
+- default mode may batch events for throughput, but strict mode must support visibly incremental episode-by-episode progression
+
 ### Live Plot Panel
 - no title
 - axis labels: `x = Episodes`, `y = Reward`
-- render per-episode reward with slight transparency (recommended `alpha ~ 0.60`)
+- render per-episode reward with slight transparency (recommended `alpha ~ 0.30`)
 - use the same run color for per-episode reward, `MA`, and `eval`
-- draw `MA` and `eval` with `2x` line width of reward and distinct styles
+- draw `MA` and `eval` with stronger emphasis than reward line width and distinct styles
 - use `alpha = 1.0` for both `MA` and `eval` lines
-  - recommended: `MA` dashed (`--`), `eval` dotted (`:`) with marker
+  - recommended: `MA` solid (`-`), `eval` dotted (`:`) with marker
+- when `Evaluation rollout on` is `False`, skip deterministic evaluation checkpoint computation and hide `evaluation rollout` line
 - legend outside right side
 - show full base label once per run, compact `moving average` / `evaluation rollout` entries
 - use plain legend labels `moving average` and `evaluation rollout` (no run-id suffix)
@@ -218,6 +226,7 @@ Control Highlight Behavior:
 - combobox interaction regression: mousewheel does not cycle dropdown selections
 - pause/restart regression: while paused, `Train and Run` is neutral and pressing it starts a fresh run from current parameters
 - stale-event regression: ignore worker events with non-current run/session identifiers so old runs cannot overwrite active UI state
+- split-event regression: `episode` updates reward/MA every episode immediately; `episode_aux` can arrive later and must update eval/frames without duplicating reward points
 - shutdown regression: on reset/close, paused workers are resumed before stop so the process exits cleanly
 - animation runtime hotfix regression:
   - toggling `Animation on = False` clears queued playback frames immediately
@@ -229,3 +238,18 @@ Control Highlight Behavior:
 - legend persistence regression: if a run is hidden via legend toggle, it remains hidden after subsequent plot redraws/episode updates until explicitly re-enabled
 - compare GPU-fallback regression: with `Device = GPU` and CUDA unavailable, compare mode remains stable using CPU-effective execution path
 - if Tk/Tcl assets are unavailable, skip with explicit reason
+
+---
+
+## Benchmark-Derived Performance Guidance
+Use measured behavior to prioritize optimization work:
+- gradient update path is the primary runtime bottleneck (roughly `~2x` cost vs no-gradient diagnostic runs)
+- GUI overhead is small (single-digit percent range in measured setup)
+- animation overhead is secondary compared to gradient updates for this workload
+
+Blueprint implications:
+- keep UI/render optimizations focused on responsiveness, not as the main throughput lever
+- for throughput tuning, prioritize backend update cadence and model compute controls first (`train_freq`, `gradient_steps`, network size, precision)
+- preserve easy switching between:
+  - analysis mode: strict per-episode visualization
+  - throughput mode: coalesced plotting and reduced UI work

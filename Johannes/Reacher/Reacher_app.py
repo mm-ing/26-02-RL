@@ -1,26 +1,20 @@
-from __future__ import annotations
-
 import os
-import platform
+import sys
 
-# Startup guards must be applied before importing GUI/ML modules.
 os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
-if platform.system().lower().startswith("win"):
+if sys.platform.startswith("win"):
     if os.environ.get("MUJOCO_GL", "").lower() == "angle":
-        os.environ.pop("MUJOCO_GL", None)
+        del os.environ["MUJOCO_GL"]
 else:
     os.environ.setdefault("MUJOCO_GL", "egl")
 
-import tkinter as tk
-
-from Pusher_gui import PusherGUI
+from Reacher_gui import build_gui_root
 
 
 def main() -> None:
-    root = tk.Tk()
-    PusherGUI(root)
+    root = build_gui_root()
     root.mainloop()
 
 
