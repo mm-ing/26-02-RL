@@ -1,0 +1,1495 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Humanoid Documentation</title><style>body{font-family:Segoe UI,Arial,sans-serif;line-height:1.45;margin:28px;max-width:1100px} img{max-width:100%;height:auto} table{border-collapse:collapse;width:100%} th,td{border:1px solid #bbb;padding:6px 8px;text-align:left} code{background:#f4f4f4;padding:1px 3px}</style></head><body><h1 id="documentation">Documentation</h1>
+<p><strong>Project:</strong> Humanoid RL Workbench</p>
+<p><strong>Author:</strong> Johannes Gürtler</p>
+<p><strong>Submission Date:</strong> 13.03.2026</p>
+<h2 id="1-introduction">1. Introduction</h2>
+<p>This document describes the Humanoid RL Workbench after implementation and evaluation. The project includes a functioning GUI workflow (training, playback, compare-mode configuration, and plot export), documented environment/method/parameter interfaces, and empirical results for method and parameter behavior in <code>Humanoid-v5</code>. The analysis focuses on practical run behavior (transition to high reward, late-stage stability, and variance) and derives concrete tuning guidance for follow-up experiments.</p>
+<h2 id="2-workbench-and-gui-implementation">2. Workbench and GUI Implementation</h2>
+<h3 id="21-workbench">2.1 Workbench</h3>
+<p>The workbench specification is consolidated from the following design and contract files.</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role in this project</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>general.md</code></td>
+<td>Defines overall project constraints: tech stack, output structure, startup guards, testing expectations, and contract recheck process.</td>
+</tr>
+<tr>
+<td><code>logic.md</code></td>
+<td>Defines backend architecture and runtime contract: environment wrapper, SB3 policy factory, training lifecycle, event payloads, compare-mode behavior, and export flow.</td>
+</tr>
+<tr>
+<td><code>gui.md</code></td>
+<td>Defines GUI structure and behavior: panel layout, controls, parameter groups, plotting/animation interaction, and robustness requirements.</td>
+</tr>
+<tr>
+<td><code>Humanoid.md</code></td>
+<td>Defines Humanoid-specific scope: <code>Humanoid-v5</code> focus, method set (<code>PPO</code>, <code>SAC</code>, <code>TD3</code>), expected GUI behavior, and environment-specific documentation expectations.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="22-gui-implementation">2.2 GUI Implementation</h3>
+<p>The GUI is implemented as a single Tkinter workbench with four main regions: environment preview, parameter panel, control bar/current run status, and live reward plot. Training runs execute in worker threads and publish events to the UI queue so rendering and plotting remain responsive.</p>
+<p>The GUI revision uses a 50:50 label/input column layout in parameter rows, full-width label column background fill, and normalized title-case labels without underscores.</p>
+<p>GUI screenshot:</p>
+<p align="center"><img src="images/fig_2_1_gui_overview.png" alt="Humanoid GUI screenshot" /></p>
+
+<p align="center" style="font-size: 0.85em;"><em>Fig. 2.1: Humanoid RL Workbench GUI overview.</em></p>
+
+<h4 id="environment">Environment:</h4>
+<blockquote>
+<p>The <strong>Environment</strong> panel is the render preview surface. It plays back collected episode frames and reflects animation toggles and playback pacing configured in the Parameters &gt; Environment subpanel.</p>
+<p><p align="center"><img src="images/fig_2_2_environment_panel.png" alt="Environment panel" width="75%" /></p></p>
+<p><p align="center" style="font-size: 0.85em;"><em>Fig. 2.2: Environment panel (render preview surface).</em></p></p>
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Preview Canvas</td>
+<td>Displays environment frames from episode playback.</td>
+</tr>
+<tr>
+<td>Render Source</td>
+<td>Frames collected during training/evaluation updates.</td>
+</tr>
+<tr>
+<td>Runtime Behavior</td>
+<td>Visibility and pacing are controlled through Parameters &gt; Environment inputs.</td>
+</tr>
+</tbody>
+</table>
+</blockquote>
+<h4 id="parameters">Parameters:</h4>
+<blockquote>
+<p>The <strong>Parameters</strong> panel is a scrollable control surface with grouped subpanels. Each row uses a <code>label, input, label, input</code> structure so values can be edited quickly while preserving readability.</p>
+<p><p align="center"><img src="images/fig_2_3_parameters_panel.png" alt="Parameters panel" width="75%" /></p></p>
+<p><p align="center" style="font-size: 0.85em;"><em>Fig. 2.3: Parameters panel with grouped control sections.</em></p></p>
+<table>
+<thead>
+<tr>
+<th>Subgroup</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Parameters &gt; Environment</code></td>
+<td>Animation pacing and exposed environment arguments.</td>
+</tr>
+<tr>
+<td><code>Parameters &gt; Compare</code></td>
+<td>Compare-mode sweep configuration.</td>
+</tr>
+<tr>
+<td><code>Parameters &gt; General</code></td>
+<td>Episode and step limits for run horizon.</td>
+</tr>
+<tr>
+<td><code>Parameters &gt; Specific</code></td>
+<td>Shared and policy-specific hyperparameters.</td>
+</tr>
+<tr>
+<td><code>Parameters &gt; Live Plot</code></td>
+<td>Reward smoothing and evaluation rollout plotting toggles.</td>
+</tr>
+</tbody>
+</table>
+</blockquote>
+<h4 id="parameters-environment">Parameters &gt; Environment:</h4>
+<blockquote>
+<p>The <strong>Parameters &gt; Environment</strong> subpanel contains animation pacing controls and exposed environment arguments. <code>Update</code> applies edited values to active trainers.</p>
+<p><p align="center"><img src="images/fig_2_4_params_environment.png" alt="Parameters Environment subpanel" width="75%" /></p></p>
+<p><p align="center" style="font-size: 0.85em;"><em>Fig. 2.4: Parameters &gt; Environment subpanel.</em></p></p>
+<p><strong>Environment Animation Controls</strong></p>
+<table>
+<thead>
+<tr>
+<th>Input / Toggle</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Animation On</code></td>
+<td>Toggle</td>
+<td><code>True</code></td>
+<td>Enables or disables frame playback in the environment preview panel.</td>
+</tr>
+<tr>
+<td><code>Animation Fps</code></td>
+<td>Input</td>
+<td><code>30</code></td>
+<td>Target playback frame rate for rendered episode frames.</td>
+</tr>
+<tr>
+<td><code>Update Rate (Episodes)</code></td>
+<td>Input</td>
+<td><code>1</code></td>
+<td>Number of episodes between visual/status updates. Lower values update more frequently.</td>
+</tr>
+<tr>
+<td><code>Frame Stride</code></td>
+<td>Input</td>
+<td><code>2</code></td>
+<td>Keeps every N-th frame for playback to control speed and load.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Environment Arguments</strong></p>
+<table>
+<thead>
+<tr>
+<th>Input / Toggle</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Forward Reward Weight</code></td>
+<td>Input</td>
+<td><code>1.25</code></td>
+<td>Scales the forward-velocity reward contribution from the environment.</td>
+</tr>
+<tr>
+<td><code>Healthy Reward</code></td>
+<td>Input</td>
+<td><code>5.0</code></td>
+<td>Per-step survival reward while the humanoid remains healthy.</td>
+</tr>
+<tr>
+<td><code>Ctrl Cost Weight</code></td>
+<td>Input</td>
+<td><code>0.1</code></td>
+<td>Weight of the action-magnitude penalty term.</td>
+</tr>
+<tr>
+<td><code>Contact Cost Weight</code></td>
+<td>Input</td>
+<td><code>5e-7</code></td>
+<td>Weight of the external contact-force penalty term.</td>
+</tr>
+<tr>
+<td><code>Terminate When Unhealthy</code></td>
+<td>Toggle</td>
+<td><code>True</code></td>
+<td>Ends an episode early when health conditions are violated.</td>
+</tr>
+</tbody>
+</table>
+</blockquote>
+<h4 id="parameters-compare">Parameters &gt; Compare:</h4>
+<blockquote>
+<p>The <strong>Parameters &gt; Compare</strong> subpanel configures compare-mode sweeps. <code>Add</code> inserts the current parameter/value entry into the compare set, while <code>Clear</code> removes all queued compare entries.</p>
+<p><p align="center"><img src="images/fig_2_5_params_compare.png" alt="Parameters Compare subpanel" width="75%" /></p></p>
+<p><p align="center" style="font-size: 0.85em;"><em>Fig. 2.5: Parameters &gt; Compare subpanel.</em></p></p>
+<p><strong>Compare Controls</strong></p>
+<table>
+<thead>
+<tr>
+<th>Input / Toggle</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Compare On</code></td>
+<td>Toggle</td>
+<td><code>False</code></td>
+<td>Enables Cartesian multi-run comparison across configured values.</td>
+</tr>
+<tr>
+<td><code>Compare Parameter</code></td>
+<td>Input</td>
+<td><code>Policy</code></td>
+<td>Selects which parameter dimension will be varied.</td>
+</tr>
+<tr>
+<td><code>Compare Values</code></td>
+<td>Input</td>
+<td>`` (empty)</td>
+<td>Comma-separated values used for compare expansion.</td>
+</tr>
+</tbody>
+</table>
+</blockquote>
+<h4 id="parameters-general">Parameters &gt; General:</h4>
+<blockquote>
+<p>The <strong>Parameters &gt; General</strong> subpanel controls run horizon inputs for both single and compare execution flows.</p>
+<p><p align="center"><img src="images/fig_2_6_params_general.png" alt="Parameters General subpanel" width="75%" /></p></p>
+<p><p align="center" style="font-size: 0.85em;"><em>Fig. 2.6: Parameters &gt; General subpanel.</em></p></p>
+<p><strong>General Run Limits</strong></p>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Max Steps</code></td>
+<td>Input</td>
+<td><code>1000</code></td>
+<td>Maximum environment steps allowed per episode.</td>
+</tr>
+<tr>
+<td><code>Episodes</code></td>
+<td>Input</td>
+<td><code>4000</code></td>
+<td>Total number of episodes scheduled for a training run.</td>
+</tr>
+</tbody>
+</table>
+</blockquote>
+<h4 id="parameters-specific">Parameters &gt; Specific:</h4>
+<blockquote>
+<p>The <strong>Parameters &gt; Specific</strong> subpanel defines policy-dependent hyperparameters. Policy-specific fields change with <code>Policy</code>. Detailed meaning of policy-specific parameters is documented in section <code>3.2</code>.</p>
+<p><p align="center"><img src="images/fig_2_7_params_specific.png" alt="Parameters Specific subpanel" width="75%" /></p></p>
+<p><p align="center" style="font-size: 0.85em;"><em>Fig. 2.7: Parameters &gt; Specific subpanel.</em></p></p>
+<p><strong>Specific Hyperparameters</strong></p>
+<table>
+<thead>
+<tr>
+<th>Input</th>
+<th>Scope</th>
+<th>Default (when <code>Policy=SAC</code>)</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Policy</code></td>
+<td>Selector</td>
+<td><code>SAC</code></td>
+<td>Chooses the active algorithm profile (<code>PPO</code>, <code>SAC</code>, <code>TD3</code>).</td>
+</tr>
+<tr>
+<td><code>Gamma</code></td>
+<td>Shared</td>
+<td><code>0.99</code></td>
+<td>Discount factor for future rewards.</td>
+</tr>
+<tr>
+<td><code>Learning Rate</code></td>
+<td>Shared</td>
+<td><code>3e-4</code></td>
+<td>Base optimizer step size.</td>
+</tr>
+<tr>
+<td><code>Batch Size</code></td>
+<td>Shared</td>
+<td><code>256</code></td>
+<td>Samples per gradient update.</td>
+</tr>
+<tr>
+<td><code>Hidden Layer</code></td>
+<td>Shared</td>
+<td><code>256,256</code></td>
+<td>Network hidden-layer width/architecture shorthand.</td>
+</tr>
+<tr>
+<td><code>Activation</code></td>
+<td>Shared</td>
+<td><code>ReLU</code></td>
+<td>Activation function used in policy/critic networks.</td>
+</tr>
+<tr>
+<td><code>Lr Strategy</code></td>
+<td>Shared</td>
+<td><code>constant</code></td>
+<td>Learning-rate schedule mode (<code>constant</code>, <code>linear</code>, <code>exponential</code>).</td>
+</tr>
+<tr>
+<td><code>Min Lr</code></td>
+<td>Shared</td>
+<td><code>1e-5</code></td>
+<td>Lower bound used by decaying LR schedules.</td>
+</tr>
+<tr>
+<td><code>Lr Decay</code></td>
+<td>Shared</td>
+<td><code>0.999</code></td>
+<td>Exponential decay factor when exponential schedule is selected.</td>
+</tr>
+<tr>
+<td><code>Buffer Size</code></td>
+<td>SAC-specific</td>
+<td><code>1_000_000</code></td>
+<td>Replay buffer capacity for off-policy learning.</td>
+</tr>
+<tr>
+<td><code>Learning Starts</code></td>
+<td>SAC-specific</td>
+<td><code>10_000</code></td>
+<td>Warm-up steps before gradient updates begin.</td>
+</tr>
+<tr>
+<td><code>Tau</code></td>
+<td>SAC-specific</td>
+<td><code>0.005</code></td>
+<td>Target-network soft-update interpolation factor.</td>
+</tr>
+<tr>
+<td><code>Train Freq</code></td>
+<td>SAC-specific</td>
+<td><code>1</code></td>
+<td>Frequency of training triggers relative to environment steps.</td>
+</tr>
+<tr>
+<td><code>Gradient Steps</code></td>
+<td>SAC-specific</td>
+<td><code>1</code></td>
+<td>Number of gradient updates per training trigger.</td>
+</tr>
+</tbody>
+</table>
+</blockquote>
+<h4 id="parameters-live-plot">Parameters &gt; Live Plot:</h4>
+<blockquote>
+<p>The <strong>Parameters &gt; Live Plot</strong> subpanel controls reward visualization behavior.</p>
+<p><p align="center"><img src="images/fig_2_8_params_live_plot.png" alt="Parameters Live Plot subpanel" width="75%" /></p></p>
+<p><p align="center" style="font-size: 0.85em;"><em>Fig. 2.8: Parameters &gt; Live Plot subpanel.</em></p></p>
+<p><strong>Live Plot Controls</strong></p>
+<table>
+<thead>
+<tr>
+<th>Input / Toggle</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Moving Average Values</code></td>
+<td>Input</td>
+<td><code>20</code></td>
+<td>Window length used to smooth reward curves.</td>
+</tr>
+<tr>
+<td><code>Evaluation Rollout On</code></td>
+<td>Toggle</td>
+<td><code>False</code></td>
+<td>Enables plotting of periodic evaluation-rollout points.</td>
+</tr>
+</tbody>
+</table>
+</blockquote>
+<h4 id="controls">Controls:</h4>
+<blockquote>
+<p>The <strong>Controls</strong> panel executes run actions. <code>Run single episode</code>, <code>Train and Run</code>, and <code>Pause/Run</code> manage execution state, while <code>Reset All</code>, <code>Clear Plot</code>, <code>Save samplings CSV</code>, and <code>Save Plot PNG</code> handle reset/export operations.</p>
+<p><p align="center"><img src="images/fig_2_9_controls_panel.png" alt="Controls panel" /></p></p>
+<p><p align="center" style="font-size: 0.85em;"><em>Fig. 2.9: Controls panel with execution and export actions.</em></p></p>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Run single episode</code></td>
+<td>Executes one rollout with current settings.</td>
+</tr>
+<tr>
+<td><code>Train and Run</code></td>
+<td>Starts full training run using active configuration.</td>
+</tr>
+<tr>
+<td><code>Pause</code> / <code>Run</code></td>
+<td>Toggles pause/resume for active workers.</td>
+</tr>
+<tr>
+<td><code>Reset All</code></td>
+<td>Stops workers and resets UI state.</td>
+</tr>
+<tr>
+<td><code>Clear Plot</code></td>
+<td>Removes current plot traces from the session view.</td>
+</tr>
+<tr>
+<td><code>Save samplings CSV</code></td>
+<td>Writes collected samplings/transitions to CSV.</td>
+</tr>
+<tr>
+<td><code>Save Plot PNG</code></td>
+<td>Exports live plot image to PNG.</td>
+</tr>
+<tr>
+<td><code>Device</code></td>
+<td>Chooses execution target (<code>CPU</code>/<code>GPU</code>).</td>
+</tr>
+</tbody>
+</table>
+</blockquote>
+<h4 id="current-run">Current Run:</h4>
+<blockquote>
+<p>The <strong>Current Run</strong> panel provides real-time progress bars for steps and episodes plus a compact status line with learning-rate and render state feedback.</p>
+<p><p align="center"><img src="images/fig_2_10_current_run_panel.png" alt="Current Run panel" /></p></p>
+<p><p align="center" style="font-size: 0.85em;"><em>Fig. 2.10: Current Run panel with progress indicators.</em></p></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Steps</code></td>
+<td>Progress within the active episode horizon.</td>
+</tr>
+<tr>
+<td><code>Episodes</code></td>
+<td>Progress over total scheduled episodes.</td>
+</tr>
+<tr>
+<td>Status Line</td>
+<td>Current LR/render feedback and run-status summary.</td>
+</tr>
+</tbody>
+</table>
+</blockquote>
+<h4 id="live-plot">Live Plot:</h4>
+<blockquote>
+<p>The <strong>Live Plot</strong> panel overlays reward curves, moving averages, and optional evaluation rollout points. Legend interaction allows quick run visibility toggling during compare sessions.</p>
+<p><p align="center"><img src="images/fig_2_11_live_plot_panel.png" alt="Live Plot panel" /></p></p>
+<p><p align="center" style="font-size: 0.85em;"><em>Fig. 2.11: Live Plot panel with rewards and moving averages.</em></p></p>
+<table>
+<thead>
+<tr>
+<th>Plot Element</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Reward Curve</td>
+<td>Per-episode raw reward trajectory.</td>
+</tr>
+<tr>
+<td>Moving Average</td>
+<td>Smoothed trend using configured window size.</td>
+</tr>
+<tr>
+<td>Evaluation Points</td>
+<td>Optional rollout markers when evaluation plotting is enabled.</td>
+</tr>
+<tr>
+<td>Interactive Legend</td>
+<td>Allows toggling visibility of individual run traces.</td>
+</tr>
+</tbody>
+</table>
+</blockquote>
+<h2 id="3-comparison-of-methods-and-parameters">3. Comparison of Methods and Parameters</h2>
+<h3 id="31-environment">3.1 Environment</h3>
+<p>The project targets Gymnasium <code>Humanoid-v5</code>, a high-dimensional continuous-control MuJoCo environment.</p>
+<p align="center">
+    <img src="images/fig_3_1a_humanoid_workbench_frame.png" alt="Humanoid animation still frame" height="220" />
+    <img src="images/fig_3_1b_humanoid_gymnasium_ref.png" alt="Gymnasium Humanoid" height="220" />
+</p>
+
+<p align="center" style="font-size: 0.85em;"><em>Fig. 3.1: Humanoid-v5 visual reference (workbench frame and Gymnasium reference image).</em></p>
+
+<p><strong>Description</strong>
+<code>Humanoid-v5</code> simulates a 3D bipedal robot with torso, legs, and arms. The task is to move forward quickly while staying upright and stable.</p>
+<p><strong>Action Space</strong>
+The action space is <code>Box(-0.4, 0.4, (17,), float32)</code>. Each action dimension applies torque to one hinge joint (abdomen, hips, knees, shoulders, elbows).</p>
+<p><strong>Observation Space</strong>
+By default the observation space is <code>Box(-inf, inf, (348,), float64)</code>. It combines kinematics and dynamics terms: <code>qpos</code>, <code>qvel</code>, <code>cinert</code>, <code>cvel</code>, <code>qfrc_actuator</code>, and <code>cfrc_ext</code>. If torso x/y are included (<code>exclude_current_positions_from_observation=False</code>), the size becomes <code>(350,)</code>.</p>
+<p><strong>Rewards</strong>
+The reward is <code>healthy_reward + forward_reward - ctrl_cost - contact_cost</code>. This encourages forward velocity and upright behavior while penalizing excessive control effort and large contact forces.</p>
+<p><strong>Starting State</strong>
+The humanoid starts near an upright default pose and velocity, with small uniform reset noise controlled by <code>reset_noise_scale</code> (default <code>1e-2</code>).</p>
+<p><strong>Episode End</strong>
+An episode terminates early if the humanoid is unhealthy and <code>terminate_when_unhealthy=True</code> (default), typically when torso height leaves <code>healthy_z_range=(1.0, 2.0)</code>. Episodes are truncated after 1000 steps.</p>
+<p><strong>Arguments</strong>
+Official Gymnasium <code>Humanoid-v5</code> arguments (environment API):</p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>xml_file</code></td>
+<td><code>"humanoid.xml"</code></td>
+<td>MuJoCo model path.</td>
+</tr>
+<tr>
+<td><code>forward_reward_weight</code></td>
+<td><code>1.25</code></td>
+<td>Weight of forward velocity reward.</td>
+</tr>
+<tr>
+<td><code>ctrl_cost_weight</code></td>
+<td><code>0.1</code></td>
+<td>Weight of action magnitude penalty.</td>
+</tr>
+<tr>
+<td><code>contact_cost_weight</code></td>
+<td><code>5e-7</code></td>
+<td>Weight of external contact-force penalty.</td>
+</tr>
+<tr>
+<td><code>contact_cost_range</code></td>
+<td><code>(-inf, 10.0)</code></td>
+<td>Clamp range used in contact cost.</td>
+</tr>
+<tr>
+<td><code>healthy_reward</code></td>
+<td><code>5.0</code></td>
+<td>Per-step survival reward while healthy.</td>
+</tr>
+<tr>
+<td><code>terminate_when_unhealthy</code></td>
+<td><code>True</code></td>
+<td>If true, terminate when torso leaves healthy range.</td>
+</tr>
+<tr>
+<td><code>healthy_z_range</code></td>
+<td><code>(1.0, 2.0)</code></td>
+<td>Valid torso height interval for healthy state.</td>
+</tr>
+<tr>
+<td><code>reset_noise_scale</code></td>
+<td><code>1e-2</code></td>
+<td>Scale of uniform noise added at reset.</td>
+</tr>
+<tr>
+<td><code>exclude_current_positions_from_observation</code></td>
+<td><code>True</code></td>
+<td>Excludes torso x/y from observation if true.</td>
+</tr>
+<tr>
+<td><code>include_cinert_in_observation</code></td>
+<td><code>True</code></td>
+<td>Include <code>cinert</code> terms in observation.</td>
+</tr>
+<tr>
+<td><code>include_cvel_in_observation</code></td>
+<td><code>True</code></td>
+<td>Include <code>cvel</code> terms in observation.</td>
+</tr>
+<tr>
+<td><code>include_qfrc_actuator_in_observation</code></td>
+<td><code>True</code></td>
+<td>Include actuator force terms in observation.</td>
+</tr>
+<tr>
+<td><code>include_cfrc_ext_in_observation</code></td>
+<td><code>True</code></td>
+<td>Include external force terms in observation.</td>
+</tr>
+<tr>
+<td><code>frame_skip</code></td>
+<td><code>5</code></td>
+<td>Number of MuJoCo simulation steps per action.</td>
+</tr>
+</tbody>
+</table>
+<p>Environment controls exposed in this GUI (Parameters &gt; Environment):</p>
+<table>
+<thead>
+<tr>
+<th>GUI label</th>
+<th>Backing argument</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Forward Reward Weight</code></td>
+<td><code>forward_reward_weight</code></td>
+<td><code>1.25</code></td>
+</tr>
+<tr>
+<td><code>Healthy Reward</code></td>
+<td><code>healthy_reward</code></td>
+<td><code>5.0</code></td>
+</tr>
+<tr>
+<td><code>Ctrl Cost Weight</code></td>
+<td><code>ctrl_cost_weight</code></td>
+<td><code>0.1</code></td>
+</tr>
+<tr>
+<td><code>Contact Cost Weight</code></td>
+<td><code>contact_cost_weight</code></td>
+<td><code>5e-7</code></td>
+</tr>
+<tr>
+<td><code>Terminate When Unhealthy</code></td>
+<td><code>terminate_when_unhealthy</code></td>
+<td><code>True</code></td>
+</tr>
+</tbody>
+</table>
+<p>Reference: https://gymnasium.farama.org/environments/mujoco/humanoid/</p>
+<h3 id="32-methods">3.2 Methods</h3>
+<p>The project compares three <code>Stable-Baselines3 (SB3)</code> methods for <code>Humanoid-v5</code>.</p>
+<p>Practical ranking for this project: <code>SAC</code> first choice, <code>PPO</code> second, <code>TD3</code> third.</p>
+<h4 id="method-comparison">Method Comparison</h4>
+<blockquote>
+<p>This table summarizes why each method is used and its main strengths and trade-offs.</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Why choose it</th>
+<th>Optimizer (and why)</th>
+<th>Pros</th>
+<th>Cons</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SAC</code> (default)</td>
+<td>Strong default for difficult continuous control with entropy-regularized exploration.</td>
+<td><code>Adam</code> for actor/critics and entropy term; chosen for stable adaptive steps under noisy off-policy gradients.</td>
+<td>Strong final performance, robust exploration, sample-efficient.</td>
+<td>Higher compute/memory cost, some reward-scale sensitivity.</td>
+</tr>
+<tr>
+<td><code>PPO</code></td>
+<td>Stable and reproducible baseline.</td>
+<td><code>Adam</code>; chosen because clipped-objective policy gradients benefit from adaptive step sizes and robust convergence.</td>
+<td>Robust optimization, easy to debug and compare.</td>
+<td>Lower sample efficiency (on-policy), usually needs more interactions.</td>
+</tr>
+<tr>
+<td><code>TD3</code></td>
+<td>Strong off-policy deterministic alternative.</td>
+<td><code>Adam</code> for actor/critics; chosen for stable training with replay-buffer noise and delayed actor updates.</td>
+<td>Sample-efficient, high asymptotic potential with tuning.</td>
+<td>Weaker exploration than SAC, higher tuning sensitivity.</td>
+</tr>
+</tbody>
+</table>
+<p>Note: In this project, PPO training enforces <code>train_timesteps &gt;= n_steps</code> per update cycle. This prevents stalled/weak PPO updates when an episode finishes with fewer steps than the rollout size.</p>
+</blockquote>
+<h4 id="default-parameters">Default Parameters</h4>
+<blockquote>
+<p>This table lists all inputs that appear in the GUI <code>Specific</code> group, ordered by field appearance (shared fields first, then policy-dependent fields).</p>
+<table>
+<thead>
+<tr>
+<th>Parameter (GUI label)</th>
+<th><code>SAC</code></th>
+<th><code>PPO</code></th>
+<th><code>TD3</code></th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Policy</code></td>
+<td><code>SAC</code></td>
+<td><code>PPO</code></td>
+<td><code>TD3</code></td>
+<td>Active algorithm selector in the <code>Specific</code> group; changes the full training dynamics and stability/exploration profile.</td>
+</tr>
+<tr>
+<td><code>Gamma</code></td>
+<td><code>0.99</code></td>
+<td><code>0.99</code></td>
+<td><code>0.99</code></td>
+<td>Discount factor for future rewards; higher values favor long-term returns, lower values make learning more short-horizon.</td>
+</tr>
+<tr>
+<td><code>Learning Rate</code></td>
+<td><code>3e-4</code></td>
+<td><code>3e-4</code></td>
+<td><code>3e-4</code></td>
+<td>Optimizer step size; too high can destabilize updates, too low slows convergence.</td>
+</tr>
+<tr>
+<td><code>Batch Size</code></td>
+<td><code>256</code></td>
+<td><code>64</code></td>
+<td><code>256</code></td>
+<td>Number of samples per gradient update; larger batches reduce update noise but increase compute per update.</td>
+</tr>
+<tr>
+<td><code>Hidden Layer</code></td>
+<td><code>256,256</code></td>
+<td><code>256,256</code></td>
+<td><code>256,256</code></td>
+<td>Network width/architecture shorthand; larger models increase capacity but also training cost and overfitting risk.</td>
+</tr>
+<tr>
+<td><code>Activation</code></td>
+<td><code>ReLU</code></td>
+<td><code>ReLU</code></td>
+<td><code>ReLU</code></td>
+<td>Activation function for policy/value networks; affects gradient flow and representational behavior.</td>
+</tr>
+<tr>
+<td><code>Lr Strategy</code></td>
+<td><code>constant</code></td>
+<td><code>constant</code></td>
+<td><code>constant</code></td>
+<td>Learning-rate schedule mode; decay strategies often improve late-stage stability versus constant LR.</td>
+</tr>
+<tr>
+<td><code>Min Lr</code></td>
+<td><code>1e-5</code></td>
+<td><code>1e-5</code></td>
+<td><code>1e-5</code></td>
+<td>Lower bound used by decaying LR schedules; prevents updates from becoming too small to learn.</td>
+</tr>
+<tr>
+<td><code>Lr Decay</code></td>
+<td><code>0.999</code></td>
+<td><code>0.999</code></td>
+<td><code>0.999</code></td>
+<td>Exponential decay factor for LR schedules; stronger decay stabilizes later training but can reduce adaptation speed.</td>
+</tr>
+<tr>
+<td><code>Buffer Size</code></td>
+<td><code>1_000_000</code></td>
+<td><code>-</code></td>
+<td><code>1_000_000</code></td>
+<td>Replay buffer capacity for off-policy learning; larger buffers increase sample diversity but may include older, less relevant data.</td>
+</tr>
+<tr>
+<td><code>Learning Starts</code></td>
+<td><code>5_000</code></td>
+<td><code>-</code></td>
+<td><code>5_000</code></td>
+<td>Warm-up interaction steps before updates begin; higher values improve initial data quality but delay learning onset.</td>
+</tr>
+<tr>
+<td><code>Tau</code></td>
+<td><code>0.005</code></td>
+<td><code>-</code></td>
+<td><code>0.005</code></td>
+<td>Target-network soft-update interpolation factor; lower values smooth targets more, higher values track new estimates faster.</td>
+</tr>
+<tr>
+<td><code>Train Freq</code></td>
+<td><code>1</code></td>
+<td><code>-</code></td>
+<td><code>-</code></td>
+<td>Training trigger frequency (shown in GUI for <code>SAC</code>); controls how often gradient updates are launched from new data.</td>
+</tr>
+<tr>
+<td><code>Gradient Steps</code></td>
+<td><code>1</code></td>
+<td><code>-</code></td>
+<td><code>-</code></td>
+<td>Number of gradient updates per training trigger (shown in GUI for <code>SAC</code>); increases sample efficiency but also computation time.</td>
+</tr>
+<tr>
+<td><code>N Steps</code></td>
+<td><code>-</code></td>
+<td><code>2048</code></td>
+<td><code>-</code></td>
+<td>PPO rollout length before each update; larger rollouts improve batch quality but reduce update frequency.</td>
+</tr>
+<tr>
+<td><code>Ent Coef</code></td>
+<td><code>-</code></td>
+<td><code>0.0</code></td>
+<td><code>-</code></td>
+<td>PPO entropy coefficient controlling exploration pressure; higher values encourage exploration, lower values favor exploitation.</td>
+</tr>
+<tr>
+<td><code>Policy Delay</code></td>
+<td><code>-</code></td>
+<td><code>-</code></td>
+<td><code>2</code></td>
+<td>TD3 actor-update delay relative to critic updates; stabilizes actor learning by letting critics improve first.</td>
+</tr>
+<tr>
+<td><code>Target Policy Noise</code></td>
+<td><code>-</code></td>
+<td><code>-</code></td>
+<td><code>0.2</code></td>
+<td>TD3 target-action smoothing noise; regularizes target Q-values and reduces overestimation spikes.</td>
+</tr>
+<tr>
+<td><code>Target Noise Clip</code></td>
+<td><code>-</code></td>
+<td><code>-</code></td>
+<td><code>0.5</code></td>
+<td>Clip bound for TD3 target policy noise; limits smoothing magnitude to avoid unrealistic target perturbations.</td>
+</tr>
+<tr>
+<td><code>Action Noise Sigma</code></td>
+<td><code>-</code></td>
+<td><code>-</code></td>
+<td><code>0.1</code></td>
+<td>TD3 action exploration noise scale (Gaussian sigma); higher sigma explores more but can slow policy refinement.</td>
+</tr>
+</tbody>
+</table>
+</blockquote>
+<h4 id="hidden-sb3-parameters">Hidden SB3 Parameters</h4>
+<blockquote>
+<p>The following SB3-relevant defaults are active in this project but are not exposed in the GUI <code>Specific</code> panel.</p>
+<table>
+<thead>
+<tr>
+<th>Policy</th>
+<th>Hidden SB3 Parameter</th>
+<th>Default</th>
+<th>Why it matters</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SAC</code></td>
+<td><code>ent_coef</code></td>
+<td><code>"auto"</code></td>
+<td>Enables automatic entropy tuning, which strongly influences exploration pressure and training stability.</td>
+</tr>
+<tr>
+<td><code>SAC</code></td>
+<td><code>use_sde</code></td>
+<td><code>True</code></td>
+<td>Activates state-dependent exploration noise; can improve exploration quality in continuous control.</td>
+</tr>
+<tr>
+<td><code>SAC</code></td>
+<td><code>sde_sample_freq</code></td>
+<td><code>4</code></td>
+<td>Controls how often SDE noise is resampled, affecting exploration smoothness and variance.</td>
+</tr>
+<tr>
+<td><code>TD3</code></td>
+<td><code>train_freq</code></td>
+<td><code>(1, "step")</code></td>
+<td>Defines update trigger cadence; changing it shifts the interaction-to-update ratio.</td>
+</tr>
+<tr>
+<td><code>TD3</code></td>
+<td><code>gradient_steps</code></td>
+<td><code>1</code></td>
+<td>Number of optimization passes per training trigger; key sample-efficiency vs compute-time trade-off.</td>
+</tr>
+</tbody>
+</table>
+</blockquote>
+<h4 id="benchmark-results">Benchmark Results</h4>
+<blockquote>
+<p><strong>Setup</strong></p>
+<ul>
+<li>Environment: <code>Humanoid-v5</code></li>
+<li>Execution mode: <code>headless</code> (no GUI loop, no animation rendering)</li>
+<li>Device scope: <code>CPU</code> and <code>GPU</code></li>
+<li>Episodes per run: <code>50</code></li>
+<li>Max steps per episode: <code>256</code></li>
+<li>Repeats per combination: <code>5</code></li>
+</ul>
+<p><strong>Raw Runs and Summary</strong></p>
+<table>
+<thead>
+<tr>
+<th>Policy</th>
+<th>Hidden Layers</th>
+<th>Device</th>
+<th style="text-align: right;">Repeat 1</th>
+<th style="text-align: right;">Repeat 2</th>
+<th style="text-align: right;">Repeat 3</th>
+<th style="text-align: right;">Repeat 4</th>
+<th style="text-align: right;">Repeat 5</th>
+<th style="text-align: right;">Repeats used</th>
+<th style="text-align: right;">Mean elapsed [s]</th>
+<th style="text-align: right;">Std [s]</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PPO</td>
+<td><code>256</code></td>
+<td>CPU</td>
+<td style="text-align: right;">37.24</td>
+<td style="text-align: right;">32.48</td>
+<td style="text-align: right;">33.36</td>
+<td style="text-align: right;">33.63</td>
+<td style="text-align: right;">34.13</td>
+<td style="text-align: right;">5/5</td>
+<td style="text-align: right;">34.166</td>
+<td style="text-align: right;">1.817</td>
+</tr>
+<tr>
+<td>PPO</td>
+<td><code>256</code></td>
+<td>GPU</td>
+<td style="text-align: right;">90.18</td>
+<td style="text-align: right;">78.80</td>
+<td style="text-align: right;">74.68</td>
+<td style="text-align: right;">72.57</td>
+<td style="text-align: right;">73.49</td>
+<td style="text-align: right;">5/5</td>
+<td style="text-align: right;">77.944</td>
+<td style="text-align: right;">7.241</td>
+</tr>
+<tr>
+<td>PPO</td>
+<td><code>256,256</code></td>
+<td>CPU</td>
+<td style="text-align: right;">36.71</td>
+<td style="text-align: right;">35.59</td>
+<td style="text-align: right;">36.04</td>
+<td style="text-align: right;">36.66</td>
+<td style="text-align: right;">37.76</td>
+<td style="text-align: right;">5/5</td>
+<td style="text-align: right;">36.553</td>
+<td style="text-align: right;">0.819</td>
+</tr>
+<tr>
+<td>PPO</td>
+<td><code>256,256</code></td>
+<td>GPU</td>
+<td style="text-align: right;">76.95</td>
+<td style="text-align: right;">73.77</td>
+<td style="text-align: right;">74.35</td>
+<td style="text-align: right;">75.50</td>
+<td style="text-align: right;">79.19</td>
+<td style="text-align: right;">5/5</td>
+<td style="text-align: right;">75.953</td>
+<td style="text-align: right;">2.180</td>
+</tr>
+<tr>
+<td>SAC</td>
+<td><code>256</code></td>
+<td>CPU</td>
+<td style="text-align: right;">27.40</td>
+<td style="text-align: right;">25.22</td>
+<td style="text-align: right;">23.47</td>
+<td style="text-align: right;">24.72</td>
+<td style="text-align: right;">26.27</td>
+<td style="text-align: right;">5/5</td>
+<td style="text-align: right;">25.416</td>
+<td style="text-align: right;">1.496</td>
+</tr>
+<tr>
+<td>SAC</td>
+<td><code>256</code></td>
+<td>GPU</td>
+<td style="text-align: right;">44.85</td>
+<td style="text-align: right;">44.80</td>
+<td style="text-align: right;">44.98</td>
+<td style="text-align: right;">42.00</td>
+<td style="text-align: right;">42.18</td>
+<td style="text-align: right;">5/5</td>
+<td style="text-align: right;">43.761</td>
+<td style="text-align: right;">1.528</td>
+</tr>
+<tr>
+<td>SAC</td>
+<td><code>256,256</code></td>
+<td>CPU</td>
+<td style="text-align: right;">26.34</td>
+<td style="text-align: right;">26.61</td>
+<td style="text-align: right;">25.28</td>
+<td style="text-align: right;">28.09</td>
+<td style="text-align: right;">26.63</td>
+<td style="text-align: right;">5/5</td>
+<td style="text-align: right;">26.589</td>
+<td style="text-align: right;">1.002</td>
+</tr>
+<tr>
+<td>SAC</td>
+<td><code>256,256</code></td>
+<td>GPU</td>
+<td style="text-align: right;">38.45</td>
+<td style="text-align: right;">42.86</td>
+<td style="text-align: right;">43.76</td>
+<td style="text-align: right;">41.85</td>
+<td style="text-align: right;">43.18</td>
+<td style="text-align: right;">5/5</td>
+<td style="text-align: right;">42.019</td>
+<td style="text-align: right;">2.112</td>
+</tr>
+<tr>
+<td>TD3</td>
+<td><code>256</code></td>
+<td>CPU</td>
+<td style="text-align: right;">11.37</td>
+<td style="text-align: right;">10.68</td>
+<td style="text-align: right;">10.74</td>
+<td style="text-align: right;">11.45</td>
+<td style="text-align: right;">9.81</td>
+<td style="text-align: right;">5/5</td>
+<td style="text-align: right;">10.810</td>
+<td style="text-align: right;">0.660</td>
+</tr>
+<tr>
+<td>TD3</td>
+<td><code>256</code></td>
+<td>GPU</td>
+<td style="text-align: right;">12.43</td>
+<td style="text-align: right;">12.22</td>
+<td style="text-align: right;">12.89</td>
+<td style="text-align: right;">13.29</td>
+<td style="text-align: right;">11.61</td>
+<td style="text-align: right;">5/5</td>
+<td style="text-align: right;">12.488</td>
+<td style="text-align: right;">0.644</td>
+</tr>
+<tr>
+<td>TD3</td>
+<td><code>256,256</code></td>
+<td>CPU</td>
+<td style="text-align: right;">21.12</td>
+<td style="text-align: right;">11.83</td>
+<td style="text-align: right;">11.13</td>
+<td style="text-align: right;">11.30</td>
+<td style="text-align: right;">10.91</td>
+<td style="text-align: right;">4/5</td>
+<td style="text-align: right;">11.290</td>
+<td style="text-align: right;">0.392</td>
+</tr>
+<tr>
+<td>TD3</td>
+<td><code>256,256</code></td>
+<td>GPU</td>
+<td style="text-align: right;">12.10</td>
+<td style="text-align: right;">11.68</td>
+<td style="text-align: right;">11.66</td>
+<td style="text-align: right;">11.54</td>
+<td style="text-align: right;">11.74</td>
+<td style="text-align: right;">5/5</td>
+<td style="text-align: right;">11.744</td>
+<td style="text-align: right;">0.212</td>
+</tr>
+</tbody>
+</table>
+<p>Note: <code>TD3</code> with <code>hidden_layer=256,256</code> on <code>CPU</code> had an outlier at repeat 1 (<code>21.12s</code>). This value was discarded; mean/std and impact are computed from repeats 2-5.</p>
+<p><strong>Analysis</strong></p>
+<table>
+<thead>
+<tr>
+<th>Policy</th>
+<th style="text-align: right;">Hidden Impact CPU (256,256 vs 256)</th>
+<th style="text-align: right;">Hidden Impact GPU (256,256 vs 256)</th>
+<th style="text-align: right;">GPU Influence @256 (GPU vs CPU)</th>
+<th style="text-align: right;">GPU Influence @256,256 (GPU vs CPU)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PPO</td>
+<td style="text-align: right;">+7.0%</td>
+<td style="text-align: right;">-2.6%</td>
+<td style="text-align: right;">+128.2%</td>
+<td style="text-align: right;">+107.8%</td>
+</tr>
+<tr>
+<td>SAC</td>
+<td style="text-align: right;">+4.6%</td>
+<td style="text-align: right;">-4.0%</td>
+<td style="text-align: right;">+72.2%</td>
+<td style="text-align: right;">+58.0%</td>
+</tr>
+<tr>
+<td>TD3</td>
+<td style="text-align: right;">+4.4%</td>
+<td style="text-align: right;">-6.0%</td>
+<td style="text-align: right;">+15.5%</td>
+<td style="text-align: right;">+4.0%</td>
+</tr>
+</tbody>
+</table>
+<p>Short discussion: In this headless setup, <code>GPU</code> is slower than <code>CPU</code> for all three policies at these benchmark scales, with the largest penalty on <code>PPO</code>, moderate on <code>SAC</code>, and smallest on <code>TD3</code>. Hidden-layer scaling is positive on CPU for all policies, while on GPU the <code>256,256</code> setting is slightly faster than <code>256</code> for <code>PPO</code>, <code>SAC</code>, and <code>TD3</code>.</p>
+</blockquote>
+<h2 id="4-results">4. Results</h2>
+<h3 id="41-method-comparison">4.1 Method comparison</h3>
+<p>This subsection compares SAC, TD3, and PPO training behavior in <code>Humanoid-v5</code> using the three reference runs below. The focus is on how quickly each method enters the high-reward regime, how stable the learning process remains after that transition, and how strongly rewards fluctuate during late training.</p>
+<p>Interpretation note: comparison is based on curve shape, transition behavior, and late-stage stability. Different max-episode settings are not used as the primary ranking criterion.</p>
+<p align="right" style="margin: 0;"><img src="images/fig_4_1_legend_sac_run.png" alt="SAC legend" width="33%" /></p>
+<p align="center" style="margin: 0;"><img src="images/fig_4_1_main_sac_run.png" alt="SAC training run" width="100%" /></p>
+
+<p align="center" style="font-size: 0.85em;"><em>Fig. 4.1: SAC run used for method comparison.</em></p>
+
+<p>Figure 4.1 analysis (<code>SAC</code>):</p>
+<ul>
+<li>Phase structure: early training is mostly low-reward with gradual improvement, middle training shows steady growth, and late training enters high reward with noticeable oscillations.</li>
+<li>Entry into high-reward regime: the transition to sustained high rewards occurs relatively late and is preceded by a long intermediate phase.</li>
+<li>Post-transition stability: after high rewards are reached, frequent downward spikes remain visible, indicating persistent variance in policy quality.</li>
+<li>Moving-average behavior: the smoothed trend rises strongly near the transition zone, then keeps improving with continued fluctuations rather than a very flat plateau.</li>
+<li>Negative events after progress: sharp temporary collapses still occur in late training, suggesting sensitivity to exploration/update noise.</li>
+<li>Final-window summary: final performance is high, but spread in episode returns is still broad compared with a highly settled run.</li>
+</ul>
+<p>Figure 4.1 quick metrics (approximate, visual readout):</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value (SAC, Fig. 4.1)</th>
+<th>Interpretation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>First sustained entry into high reward</td>
+<td>~episode <code>3100</code></td>
+<td>Late transition into strong locomotion phase.</td>
+</tr>
+<tr>
+<td>Best moving-average level</td>
+<td>~<code>5000</code></td>
+<td>Strong final asymptotic performance.</td>
+</tr>
+<tr>
+<td>Late-phase variance (last ~20%)</td>
+<td>High</td>
+<td>Stability is weaker after convergence than desired.</td>
+</tr>
+<tr>
+<td>Deep post-convergence drops</td>
+<td>Frequent</td>
+<td>Indicates noisy late-stage policy behavior.</td>
+</tr>
+</tbody>
+</table>
+<p align="right" style="margin: 0;"><img src="images/fig_4_2_legend_td3_method_run.png" alt="TD3 legend" width="33%" /></p>
+<p align="center" style="margin: 0;"><img src="images/fig_4_2_main_td3_method_run.png" alt="TD3 training run" width="100%" /></p>
+
+<p align="center" style="font-size: 0.85em;"><em>Fig. 4.2: TD3 run used for method comparison.</em></p>
+
+<p>Figure 4.2 analysis (<code>TD3</code>):</p>
+<ul>
+<li>Phase structure: early and middle phases show progressive reward growth, followed by a clearer step-up into the high-reward region.</li>
+<li>Entry into high-reward regime: the transition appears sharper once learning accelerates, with less prolonged hesitation near the threshold.</li>
+<li>Post-transition stability: high-reward behavior is more consistent, with fewer long instability stretches after convergence.</li>
+<li>Moving-average behavior: the smoothed curve climbs and then settles into a cleaner upper plateau, indicating stronger consolidation.</li>
+<li>Negative events after progress: drops still exist, but they are less dominant and recovery to high reward is typically faster.</li>
+<li>Final-window summary: high final return is combined with tighter spread, indicating better late-stage control reliability.</li>
+</ul>
+<p>Figure 4.2 quick metrics (approximate, visual readout):</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value (TD3, Fig. 4.2)</th>
+<th>Interpretation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>First sustained entry into high reward</td>
+<td>~episode <code>3000</code></td>
+<td>Slightly earlier and sharper transition than SAC.</td>
+</tr>
+<tr>
+<td>Best moving-average level</td>
+<td>~<code>5200</code></td>
+<td>Very strong upper plateau quality.</td>
+</tr>
+<tr>
+<td>Late-phase variance (last ~20%)</td>
+<td>Medium</td>
+<td>More stable than SAC in the final stage.</td>
+</tr>
+<tr>
+<td>Deep post-convergence drops</td>
+<td>Occasional</td>
+<td>Better recovery profile and less persistent instability.</td>
+</tr>
+</tbody>
+</table>
+<p align="right" style="margin: 0;"><img src="images/fig_4_3_legend_ppo_method_run.png" alt="PPO legend" width="33%" /></p>
+<p align="center" style="margin: 0;"><img src="images/fig_4_3_main_ppo_method_run.png" alt="PPO training run" width="100%" /></p>
+
+<p align="center" style="font-size: 0.85em;"><em>Fig. 4.3: PPO run used for method comparison.</em></p>
+
+<p>Figure 4.3 analysis (<code>PPO</code>):</p>
+<ul>
+<li>Phase structure: reward stays mostly low with fluctuations and no clear transition to a stable high-reward phase.</li>
+<li>Entry into high-reward regime: no sustained high-reward entry is visible in this run.</li>
+<li>Post-transition stability: because a stable high-reward regime is not reached, late-stage stability at high performance cannot be confirmed.</li>
+<li>Moving-average behavior: the smoothed curve remains low and does not show a consistent increasing trend toward a strong upper plateau.</li>
+<li>Negative events after progress: repeated regressions interrupt local improvements, indicating unstable learning progress.</li>
+<li>Final-window summary: within the observed computation-time/cost budget, PPO does not show consistent high-reward convergence in this run.</li>
+</ul>
+<p>Figure 4.3 quick metrics (approximate, visual readout):</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value (PPO, Fig. 4.3)</th>
+<th>Interpretation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>First sustained entry into high reward</td>
+<td>Not observed</td>
+<td>No durable transition into a high-reward regime in this run.</td>
+</tr>
+<tr>
+<td>Best moving-average level</td>
+<td>Low (visual)</td>
+<td>Trend remains below SAC/TD3 method-comparison levels.</td>
+</tr>
+<tr>
+<td>Late-phase variance (last ~20%)</td>
+<td>Medium-High</td>
+<td>Fluctuations persist without clear convergence.</td>
+</tr>
+<tr>
+<td>Deep post-convergence drops</td>
+<td>Not applicable</td>
+<td>A true post-convergence phase is not reached.</td>
+</tr>
+</tbody>
+</table>
+<p>SAC and TD3 reach the high-reward regime, but transition and late-stage behavior differ. The SAC run shows stronger oscillations in the late stage and larger short-term reward swings after entering high-reward regions. The TD3 run (<code>action_noise_sigma=0.03</code>) shows a cleaner transition into the high-reward phase and a more stable upper plateau with fewer persistent regressions. In contrast, the PPO run in this comparison stays low and does not increase consistently toward a sustained high-reward regime; it is also shorter because PPO training was run with tighter computation-time/cost constraints.</p>
+<p>From a parameter perspective, the three runs share many stabilizing defaults (<code>gamma=0.99</code>, <code>learning_rate=3e-4</code>, <code>batch_size=256</code>, <code>hidden_layer=256,256</code>, replay buffer scale in the same order), so the dominant behavioral differences are mainly explained by method-specific update dynamics:</p>
+<ul>
+<li><code>SAC</code>: stochastic policy optimization with entropy-driven exploration pressure. This often improves exploration robustness, but in this setup it also produces a noisier late-stage learning signal and more fluctuation near the performance ceiling.</li>
+<li><code>TD3</code>: deterministic policy with delayed actor updates, clipped double critics, and target policy smoothing. With <code>action_noise_sigma=0.03</code>, exploration remains active but controlled, which appears to reduce late-stage instability and support steadier convergence.</li>
+<li><code>PPO</code>: on-policy updates with clipped policy ratios and value-function coupling; in this specific run it does not achieve sustained high-reward behavior, and the shorter budget further limits evidence for late-stage consolidation.</li>
+</ul>
+<p>In this specific project setup, <strong>TD3 works better than SAC and PPO for the presented training runs</strong>. The practical reason is not only final reward level, but especially the more stable high-reward behavior once the policy has learned useful locomotion.</p>
+<p>Convergence-reliability criterion used here: method selection prioritizes sustained high-reward stability and recovery behavior over isolated peak episodes.</p>
+<p>Therefore, the next subsection uses <code>TD3</code> as the baseline for parameter-focused comparison.</p>
+<h3 id="42-parameter-comparison">4.2 Parameter comparison</h3>
+<p>Based on the method comparison above, parameter sensitivity is analyzed with <code>TD3</code>.</p>
+<p>For fine tuning in this workbench, parameters should be prioritized by expected impact on the stability-exploration trade-off and convergence quality:</p>
+<ul>
+<li><code>action_noise_sigma</code> (highest priority): directly controls exploration amplitude in deterministic TD3. It has immediate visible impact on reward variance, transition speed into high-reward behavior, and late-stage control smoothness.</li>
+<li><code>learning_rate</code>: strongly influences optimizer stability and adaptation speed. If too high, instability and value overshoot increase; if too low, progress becomes slow and plateaus are reached late.</li>
+<li><code>policy_delay</code>: controls how often actor updates are applied relative to critic updates. This is a key stabilizer in TD3 and often determines whether the actor tracks a reliable critic signal.</li>
+<li><code>target_policy_noise</code> and <code>target_noise_clip</code>: shape target-action smoothing. These parameters control overestimation robustness and can reduce critic-driven oscillations when tuned consistently with exploration noise.</li>
+<li><code>gradient_steps</code> (with effective update frequency): defines optimization intensity per interaction. This governs sample efficiency vs wall-clock cost and can amplify instability if update intensity is too high.</li>
+<li><code>batch_size</code>: affects gradient variance and update smoothness. Larger batches typically stabilize updates but can reduce responsiveness and increase per-update compute.</li>
+</ul>
+<p>Practical tuning order for this project: first tune <code>action_noise_sigma</code>, then co-tune <code>learning_rate</code> and <code>policy_delay</code>, and only afterwards refine <code>target_policy_noise</code>/<code>target_noise_clip</code>, <code>gradient_steps</code>, and <code>batch_size</code>.</p>
+<p>Parameter sensitivity ranking (for practical fine tuning):</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Impact</th>
+<th>Main risk direction</th>
+<th>Recommended first search range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>action_noise_sigma</code></td>
+<td>High</td>
+<td>Too high: oscillatory plateau. Too low: under-exploration.</td>
+<td><code>0.02</code> to <code>0.12</code></td>
+</tr>
+<tr>
+<td><code>learning_rate</code></td>
+<td>High</td>
+<td>Too high: unstable critics/actor. Too low: slow convergence.</td>
+<td><code>1e-4</code> to <code>5e-4</code></td>
+</tr>
+<tr>
+<td><code>policy_delay</code></td>
+<td>High</td>
+<td>Too low: actor chases noisy critic. Too high: slow adaptation.</td>
+<td><code>1</code> to <code>3</code></td>
+</tr>
+<tr>
+<td><code>target_policy_noise</code></td>
+<td>Medium-High</td>
+<td>Too high: over-smoothing. Too low: weaker regularization.</td>
+<td><code>0.1</code> to <code>0.3</code></td>
+</tr>
+<tr>
+<td><code>target_noise_clip</code></td>
+<td>Medium</td>
+<td>Too tight: weak smoothing. Too loose: noisy targets.</td>
+<td><code>0.3</code> to <code>0.7</code></td>
+</tr>
+<tr>
+<td><code>gradient_steps</code></td>
+<td>Medium</td>
+<td>Too high: compute-heavy and potentially unstable.</td>
+<td><code>1</code> to <code>4</code></td>
+</tr>
+<tr>
+<td><code>batch_size</code></td>
+<td>Medium</td>
+<td>Too small: noisy updates. Too large: slow adaptation.</td>
+<td><code>128</code> to <code>512</code></td>
+</tr>
+</tbody>
+</table>
+<p>Recommended tuning protocol (reproducible):</p>
+<ol>
+<li>Change one parameter group at a time; keep all others fixed.</li>
+<li>Run at least <code>3</code> random seeds per setting.</li>
+<li>Evaluate using the same moving-average window and plotting settings.</li>
+<li>Track both level and stability metrics (plateau height, late variance, drop count).</li>
+<li>Stop a parameter sweep if no improvement is observed over two consecutive settings.</li>
+</ol>
+<p>The most relevant exposed TD3 parameter in this project is <code>action_noise_sigma</code>, because it directly controls exploration amplitude in a deterministic-policy algorithm:</p>
+<ul>
+<li>Lower <code>action_noise_sigma</code> can improve late-stage control smoothness and reduce policy jitter, but may under-explore if set too low.</li>
+<li>Higher <code>action_noise_sigma</code> can improve early exploration coverage, but may slow stabilization and increase reward variance in later phases.</li>
+</ul>
+<p>In the observed runs, <code>action_noise_sigma=0.03</code> provides a good balance between exploration and convergence stability. Relative to larger sigma settings, the training behavior is more consistent in the high-reward regime, which is the main reason it is selected as the practical default for follow-up experiments.</p>
+<p>Additional TD3 parameters with high practical impact in this workbench are:</p>
+<ul>
+<li><code>policy_delay</code>: controls actor update frequency relative to critic updates; stronger delay generally improves stability but can slow policy adaptation.</li>
+<li><code>target_policy_noise</code> and <code>target_noise_clip</code>: regulate target smoothing strength; too strong values can over-smooth updates, too weak values can increase value overestimation risk.</li>
+<li><code>gradient_steps</code> and effective update frequency: higher update intensity can improve sample efficiency, but often increases wall-clock cost and sensitivity to noise.</li>
+</ul>
+<p align="right" style="margin: 0;"><img src="images/fig_4_4_legend_td3_parameter_run.png" alt="TD3 legend" width="33%" /></p>
+<p align="center" style="margin: 0;"><img src="images/fig_4_4_main_td3_parameter_run.png" alt="TD3 training run" width="100%" /></p>
+
+<p align="center" style="font-size: 0.85em;"><em>Fig. 4.4: TD3 parameter-comparison run.</em></p>
+
+<p>Figure 4.4 analysis (<code>TD3</code>):</p>
+<ul>
+<li>Relative to <code>sigma=0.03</code>, exploration is stronger and the reward trace shows broader short-term variance, especially around the transition to high rewards.</li>
+<li>The run still reaches high performance, but late-stage behavior is less compact: deep temporary drops appear more often before recovering.</li>
+<li>The moving-average trend remains positive, but convergence is less smooth than the <code>sigma=0.03</code> run, indicating a higher exploration-induced disturbance level.</li>
+<li>This behavior is consistent with the TD3 exploration mechanism: larger action noise improves state-action coverage early, while making final policy refinement noisier.</li>
+</ul>
+<p>Figure 4.4 quick metrics (approximate, visual readout):</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value (TD3, Fig. 4.4)</th>
+<th>Interpretation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>First sustained entry into high reward</td>
+<td>~episode <code>3200</code></td>
+<td>Transition occurs, but with higher variability.</td>
+</tr>
+<tr>
+<td>Best moving-average level</td>
+<td>~<code>5000</code></td>
+<td>High ceiling is still reachable.</td>
+</tr>
+<tr>
+<td>Late-phase variance (last ~20%)</td>
+<td>Medium-High</td>
+<td>Higher fluctuation than <code>sigma=0.03</code>.</td>
+</tr>
+<tr>
+<td>Deep post-convergence drops</td>
+<td>More frequent</td>
+<td>Exploration noise disturbs late-stage refinement.</td>
+</tr>
+</tbody>
+</table>
+<p>Interpretation for fine tuning: <code>sigma=0.1</code> is useful when additional exploration is needed, but for stable late-stage locomotion quality in this setup, <code>sigma=0.03</code> remains the better operating point.</p>
+<p>Failure-mode guide during tuning:</p>
+<ul>
+<li>Too much exploration noise: repeated deep reward collapses and unstable final plateau.</li>
+<li>Too little exploration noise: long stagnation in mid-reward regime and delayed breakthrough.</li>
+<li>Learning rate too high: abrupt oscillations, critic instability, and weak consolidation.</li>
+<li>Learning rate too low: smooth but very slow progress with low final sample efficiency.</li>
+<li>Update intensity too high (<code>gradient_steps</code>): higher compute load with possible instability amplification.</li>
+</ul>
+<p>Decision rule for selecting the best setting:</p>
+<ol>
+<li>Primary score: highest late-phase moving average (last ~20% episodes).</li>
+<li>Stability penalty: prefer lower late-phase variance and fewer deep drops.</li>
+<li>Tie-breaker: earlier sustained entry into the high-reward regime.</li>
+</ol>
+<p>Next-step experiment matrix:</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Parameters varied</th>
+<th>Candidate values</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A</td>
+<td><code>action_noise_sigma</code></td>
+<td><code>0.02, 0.03, 0.05, 0.08, 0.10, 0.12</code></td>
+<td>Lock exploration baseline.</td>
+</tr>
+<tr>
+<td>B</td>
+<td><code>learning_rate</code> x <code>policy_delay</code></td>
+<td><code>1e-4, 2e-4, 3e-4, 5e-4</code> x <code>1,2,3</code></td>
+<td>Balance adaptation speed and stability.</td>
+</tr>
+<tr>
+<td>C</td>
+<td><code>target_policy_noise</code> x <code>target_noise_clip</code></td>
+<td><code>0.1,0.2,0.3</code> x <code>0.3,0.5,0.7</code></td>
+<td>Improve critic target robustness.</td>
+</tr>
+<tr>
+<td>D</td>
+<td><code>gradient_steps</code> x <code>batch_size</code></td>
+<td><code>1,2,4</code> x <code>128,256,512</code></td>
+<td>Optimize sample-efficiency vs stability/compute.</td>
+</tr>
+</tbody>
+</table>
+<p>Conclusion for parameter studies in this project: keep <code>TD3</code> as the base method, start from <code>action_noise_sigma=0.03</code>, and vary one stability-critical parameter at a time to isolate effects on convergence speed, plateau quality, and variance.</p>
+<h2 id="5-conclusion">5. Conclusion</h2>
+<p>The Humanoid RL Workbench is operational end-to-end: environment interaction, parameterized training control, live plotting, compare-oriented analysis workflow, and documentation of implementation and results are all in place. Method comparison indicates that both SAC and TD3 can reach high reward, but TD3 provides more reliable late-stage behavior in the presented runs. Parameter comparison suggests that exploration-noise control is the most impactful first tuning axis, with <code>action_noise_sigma=0.03</code> as the strongest practical baseline in this setup.</p>
+<p>Suggested next steps:</p>
+<ol>
+<li>Run the staged TD3 tuning matrix (noise, then LR/policy-delay, then target-noise settings, then update-intensity settings) with at least three seeds per configuration.</li>
+<li>Report each setting with a consistent metric pack: late-phase moving average, late-phase variance, deep-drop count, and first sustained high-reward episode.</li>
+<li>Validate robustness of the selected TD3 configuration under small environment-argument changes (<code>forward_reward_weight</code>, <code>ctrl_cost_weight</code>, <code>terminate_when_unhealthy</code>) to check transfer of stability.</li>
+<li>Keep SAC as a reference baseline in a reduced benchmark set to ensure method-choice decisions remain valid when tuning scope or reward shaping changes.</li>
+</ol>
+<h2 id="6-appendix">6. Appendix</h2>
+<h3 id="61-list-of-figures-and-filenames">6.1 List of Figures and Filenames</h3>
+<table>
+    <thead>
+        <tr>
+            <th style="width: 12%; white-space: nowrap;">Figure</th>
+            <th style="width: 30%;">Description</th>
+            <th style="width: 58%;">Filename(s) used</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr><td>Fig. 2.1</td><td>Humanoid RL Workbench GUI overview</td><td><code>images/fig_2_1_gui_overview.png</code></td></tr>
+        <tr><td>Fig. 2.2</td><td>Environment panel</td><td><code>images/fig_2_2_environment_panel.png</code></td></tr>
+        <tr><td>Fig. 2.3</td><td>Parameters panel</td><td><code>images/fig_2_3_parameters_panel.png</code></td></tr>
+        <tr><td>Fig. 2.4</td><td>Parameters &gt; Environment</td><td><code>images/fig_2_4_params_environment.png</code></td></tr>
+        <tr><td>Fig. 2.5</td><td>Parameters &gt; Compare</td><td><code>images/fig_2_5_params_compare.png</code></td></tr>
+        <tr><td>Fig. 2.6</td><td>Parameters &gt; General</td><td><code>images/fig_2_6_params_general.png</code></td></tr>
+        <tr><td>Fig. 2.7</td><td>Parameters &gt; Specific</td><td><code>images/fig_2_7_params_specific.png</code></td></tr>
+        <tr><td>Fig. 2.8</td><td>Parameters &gt; Live Plot</td><td><code>images/fig_2_8_params_live_plot.png</code></td></tr>
+        <tr><td>Fig. 2.9</td><td>Controls panel</td><td><code>images/fig_2_9_controls_panel.png</code></td></tr>
+        <tr><td>Fig. 2.10</td><td>Current Run panel</td><td><code>images/fig_2_10_current_run_panel.png</code></td></tr>
+        <tr><td>Fig. 2.11</td><td>Live Plot panel</td><td><code>images/fig_2_11_live_plot_panel.png</code></td></tr>
+        <tr><td>Fig. 3.1</td><td>Humanoid-v5 visual reference</td><td><code>images/fig_3_1a_humanoid_workbench_frame.png</code>; <code>images/fig_3_1b_humanoid_gymnasium_ref.png</code></td></tr>
+        <tr><td>Fig. 4.1</td><td>SAC run for method comparison</td><td><code>images/fig_4_1_legend_sac_run.png</code>; <code>images/fig_4_1_main_sac_run.png</code></td></tr>
+        <tr><td>Fig. 4.2</td><td>TD3 run for method comparison</td><td><code>images/fig_4_2_legend_td3_method_run.png</code>; <code>images/fig_4_2_main_td3_method_run.png</code></td></tr>
+        <tr><td>Fig. 4.3</td><td>PPO run for method comparison</td><td><code>images/fig_4_3_legend_ppo_method_run.png</code>; <code>images/fig_4_3_main_ppo_method_run.png</code></td></tr>
+        <tr><td>Fig. 4.4</td><td>TD3 run for parameter comparison</td><td><code>images/fig_4_4_legend_td3_parameter_run.png</code>; <code>images/fig_4_4_main_td3_parameter_run.png</code></td></tr>
+    </tbody>
+</table></body></html>
